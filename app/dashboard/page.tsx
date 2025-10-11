@@ -67,7 +67,7 @@ interface Order {
     }
     status: 'pending' | 'confirmed' | 'preparing' | 'shipped' | 'delivered' | 'cancelled'
     orderDate: string
-    paymentMethod: string
+    paymentMethod?: string
     deliveryInfo: {
         city: string
         address: string
@@ -137,7 +137,7 @@ export default function DashboardPage() {
     const [addingOrder, setAddingOrder] = useState(false)
 
     const form = useForm<OrderForm>({
-        resolver: zodResolver(orderSchema),
+        resolver: zodResolver(orderSchema) as any,
         defaultValues: {
             customer: {
                 fullName: "",
@@ -284,13 +284,12 @@ export default function DashboardPage() {
         const IconComponent = config.icon
 
         return (
-            <Badge variant="outline" className={`${config.color} flex items - center gap - 1.5 px - 3 py - 1 border font - medium`}>
+            <Badge variant="outline" className={`${config.color} flex items-center gap-1.5 px-3 py-1 border font-medium`}>
                 <IconComponent className="h-3.5 w-3.5" />
                 {config.label}
             </Badge>
         )
     }
-
     const filteredOrders = orders.filter(order => {
         const matchesSearch =
             order.orderNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -758,10 +757,10 @@ export default function DashboardPage() {
                                                         outerRadius={80}
                                                         fill="#8884d8"
                                                         dataKey="value"
-                                                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}% `}
+                                                        label={({ name, percent }) => `${name} ${(percent as any * 100).toFixed(0)}% `}
                                                     >
                                                         {Object.entries(stats.revenueByStatus).map((entry, index) => (
-                                                            <Cell key={`cell - ${index} `} fill={COLORS[index % COLORS.length]} />
+                                                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                                         ))}
                                                     </Pie>
                                                     <Tooltip />
@@ -959,7 +958,7 @@ export default function DashboardPage() {
                                             {stats.recentOrders.map((order) => (
                                                 <div key={order._id} className="flex items-center justify-between border-b border-gray-200 pb-4 last:border-0">
                                                     <div>
-                                                        <Link href={`/ dashboard / orders / ${order._id} `} className="font-bold text-gray-900 hover:underline">
+                                                        <Link href={`/dashboard/orders/${order._id}`} className="font-bold text-gray-900 hover:underline">
                                                             {order.orderNumber}
                                                         </Link>
                                                         <p className="text-sm text-gray-900">{order.customer.fullName} - {order.orderSummary.totalPrice.toFixed(2)} TND</p>
