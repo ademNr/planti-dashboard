@@ -8,11 +8,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
 import {
     Package, DollarSign, MapPin, Phone, Mail, Calendar, ArrowLeft,
     Truck, CheckCircle, Clock, XCircle, RefreshCw,
     Link,
-    CreditCard
+    CreditCard,
+    FileText
 } from "lucide-react"
 import { DashboardHeader } from "@/components/header"
 import Image from "next/image"
@@ -43,6 +45,8 @@ interface Order {
         deliveryFee: number
         totalPrice: number
         totalItems: number
+        profit?: number
+        freeProductQuantity?: number
     }
     status: 'pending' | 'confirmed' | 'preparing' | 'shipped' | 'delivered' | 'cancelled'
     orderDate: string
@@ -53,6 +57,7 @@ interface Order {
         estimatedDelivery: string
     }
     emailSent: boolean
+    note?: string
     createdAt: string
     updatedAt: string
 }
@@ -300,6 +305,25 @@ export default function OrderDetailsPage() {
                                         <p className="text-gray-900">{new Date(order.updatedAt).toLocaleString('fr-FR', { dateStyle: 'long', timeStyle: 'short' })}</p>
                                     </div>
                                 </div>
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-2">
+                                        <FileText className="h-5 w-5 text-gray-900" />
+                                        <p className="text-sm font-semibold text-gray-900">Note</p>
+                                    </div>
+                                    <Textarea
+                                        value={formData.note || ''}
+                                        onChange={(e) => setFormData({ ...formData, note: e.target.value })}
+                                        placeholder="Ajoutez une note après l'appel de confirmation..."
+                                        className="min-h-[100px] text-gray-900 bg-white border-gray-300"
+                                    />
+                                    <Button 
+                                        onClick={updateOrder} 
+                                        disabled={updating}
+                                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                    >
+                                        {updating ? 'Enregistrement...' : 'Enregistrer la note'}
+                                    </Button>
+                                </div>
                             </CardContent>
                         </Card>
                     </TabsContent>
@@ -347,7 +371,14 @@ export default function OrderDetailsPage() {
                         <Card className="bg-white border-gray-200">
                             <CardHeader>
                                 <CardTitle className="text-lg font-semibold text-gray-900">Produits Commandés</CardTitle>
-                                <CardDescription className="text-gray-900">{order.orderSummary.totalItems} articles au total</CardDescription>
+                                <CardDescription className="text-gray-900">
+                                    {order.orderSummary.totalItems} articles au total
+                                    {order.orderSummary.totalItems >= 3 && (
+                                        <span className="text-emerald-600 font-medium ml-2">
+                                            (+ 1 produit gratuit)
+                                        </span>
+                                    )}
+                                </CardDescription>
                             </CardHeader>
                             <CardContent>
                                 <div className="space-y-6">
@@ -362,6 +393,15 @@ export default function OrderDetailsPage() {
                                             <p className="text-right font-semibold text-gray-900">{product.subtotal.toFixed(2)} TND</p>
                                         </div>
                                     ))}
+                                    {order.orderSummary.totalItems >= 3 && (
+                                        <div className="flex items-center gap-4 border-t border-emerald-200 pt-4 bg-emerald-50 rounded-lg p-4">
+                                            <div className="flex-1">
+                                                <p className="font-semibold text-emerald-700">Produit Gratuit</p>
+                                                <p className="text-sm text-emerald-600">Offert pour commande de 3+ produits</p>
+                                            </div>
+                                            <p className="text-right font-semibold text-emerald-700">Gratuit</p>
+                                        </div>
+                                    )}
                                 </div>
                             </CardContent>
                         </Card>
@@ -382,10 +422,65 @@ export default function OrderDetailsPage() {
                                     <p className="text-gray-900">Frais de Livraison</p>
                                     <p className="text-gray-900">{order.orderSummary.deliveryFee.toFixed(2)} TND</p>
                                 </div>
-                                <div className="flex justify-between font-semibold text-gray-900 pt-4 border-t">
-                                    <p>Total</p>
-                                    <p>{order.orderSummary.totalPrice.toFixed(2)} TND</p>
-                                </div>
+                                {(() => {
+                                    const DELIVERY_FEE = 8 // Shipping cost in TND
+                                    const PRODUCT_COST = 6 // Cost per product unit in TND
+                                    const FREE_PRODUCT_COST = 6 // Cost of free product
+                                    
+                                    // Calculate free products: 1 free product for orders with 3+ products
+                                    const freeProductQuantity = order.orderSummary.totalItems >= 3 ? 1 : 0
+                                    
+                                    // Revenue = totalPrice - shipping
+                                    const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+                                    
+                                    // Profit calculation
+                                    const numberOfProducts = order.orderSummary.totalItems
+                                    const productCosts = numberOfProducts * PRODUCT_COST
+                                    const freeProductCost = freeProductQuantity > 0 ? FREE_PRODUCT_COST : 0
+                                    const onePercentDeduction = revenue * 0.01
+                                    const profit = revenue - productCosts - freeProductCost - onePercentDeduction
+                                    
+                                    return (
+                                        <>
+                                            {freeProductQuantity > 0 && (
+                                                <div className="flex justify-between text-emerald-600">
+                                                    <p className="font-medium">Produits Gratuits</p>
+                                                    <p className="font-medium">{freeProductQuantity} produit(s)</p>
+                                                </div>
+                                            )}
+                                            <div className="flex justify-between font-semibold text-gray-900 pt-4 border-t">
+                                                <p>Total Commande</p>
+                                                <p>{order.orderSummary.totalPrice.toFixed(2)} TND</p>
+                                            </div>
+                                            <div className="flex justify-between text-sm text-gray-600 pt-2">
+                                                <p>Moins: Frais de Livraison</p>
+                                                <p>-{DELIVERY_FEE.toFixed(2)} TND</p>
+                                            </div>
+                                            <div className="flex justify-between font-semibold text-gray-900 pt-2 border-t">
+                                                <p>Revenu</p>
+                                                <p>{revenue.toFixed(2)} TND</p>
+                                            </div>
+                                            <div className="flex justify-between text-sm text-gray-600 pt-2">
+                                                <p>Moins: Coût Produits ({numberOfProducts} × {PRODUCT_COST} TND)</p>
+                                                <p>-{productCosts.toFixed(2)} TND</p>
+                                            </div>
+                                            {freeProductCost > 0 && (
+                                                <div className="flex justify-between text-sm text-gray-600">
+                                                    <p>Moins: Produit Gratuit</p>
+                                                    <p>-{freeProductCost.toFixed(2)} TND</p>
+                                                </div>
+                                            )}
+                                            <div className="flex justify-between text-sm text-gray-600">
+                                                <p>Moins: 1% du Revenu</p>
+                                                <p>-{onePercentDeduction.toFixed(2)} TND</p>
+                                            </div>
+                                            <div className="flex justify-between font-semibold text-emerald-600 pt-2 border-t">
+                                                <p>Profit Net</p>
+                                                <p>{profit.toFixed(2)} TND</p>
+                                            </div>
+                                        </>
+                                    )
+                                })()}
                             </CardContent>
                         </Card>
                     </TabsContent>

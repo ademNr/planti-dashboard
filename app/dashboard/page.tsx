@@ -17,7 +17,7 @@ import * as z from "zod"
 import {
     Package, DollarSign, ShoppingCart, Search,
     Eye, Truck, CheckCircle, Clock, XCircle, RefreshCw,
-    BarChart3, MapPin, Phone, TrendingUp, User, CreditCard
+    BarChart3, MapPin, Phone, TrendingUp, User, CreditCard, FileText
 } from "lucide-react"
 import { DashboardHeader } from "@/components/header"
 import Link from "next/link"
@@ -64,6 +64,8 @@ interface Order {
         deliveryFee: number
         totalPrice: number
         totalItems: number
+        profit?: number
+        freeProductQuantity?: number
     }
     status: 'pending' | 'confirmed' | 'preparing' | 'shipped' | 'delivered' | 'cancelled'
     orderDate: string
@@ -74,6 +76,7 @@ interface Order {
         estimatedDelivery: string
     }
     emailSent: boolean
+    note?: string
     createdAt: string
     updatedAt: string
 }
@@ -82,6 +85,7 @@ interface DashboardStats {
     totalOrders: number
     totalRevenue: number
     totalProfit?: number
+    totalFreeProducts?: number
     pendingOrders: number
     confirmedOrders: number
     preparingOrders: number
@@ -89,6 +93,7 @@ interface DashboardStats {
     deliveredOrders: number
     cancelledOrders: number
     avgOrderValue: number
+    avgProfitPerOrder?: number
     todayOrders: number
     todayRevenue: number
     todayProfit?: number
@@ -195,32 +200,57 @@ export default function DashboardPage() {
         }
     }
 
-    // Calculate revenue and profit excluding delivery fees and product costs
+    // Calculate profit and free products based on order data
     const adjustedStats = useMemo(() => {
         if (!stats || !orders.length) return stats
 
-        const DELIVERY_FEE = 8 // Delivery fee in TND
-        const PRODUCT_COST = 6 // Cost per product in TND
+        const DELIVERY_FEE = 8 // Shipping cost in TND
+        const PRODUCT_COST = 6 // Cost per product unit in TND
+        const FREE_PRODUCT_COST = 6 // Cost of free product given for orders with 3+ products
 
-        // Calculate revenue without delivery fees (subtract 8 TND per order) and exclude 1%
-        const calculateRevenueWithoutDelivery = (orderList: Order[]) => {
+        // Calculate revenue: totalPrice - 8 TND (shipping cost)
+        const calculateRevenue = (orderList: Order[]) => {
             return orderList.reduce((sum, order) => {
-                // Revenue = (totalPrice - 8 TND delivery fee) * 0.99 (exclude 1%)
-                const revenue = (order.orderSummary.totalPrice - DELIVERY_FEE) * 0.99
+                if (order.status === 'cancelled') return sum
+                // Revenue = totalPrice - shipping cost (8 TND)
+                const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
                 return sum + Math.max(0, revenue) // Ensure revenue is not negative
             }, 0)
         }
 
-        // Calculate profit: totalPrice - deliveryFee - (numberOfProducts * PRODUCT_COST) - (free product cost if 3+ products)
+        // Calculate profit: Revenue - (product costs) - (1% of revenue) - (free product cost if 3+ products)
         const calculateProfit = (orderList: Order[]) => {
             return orderList.reduce((sum, order) => {
-                // Count total number of products in the order (sum of quantities)
-                const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
-                // If order has 3 or more products, one product is free (subtract additional 6 TND)
-                const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
-                // Profit = totalPrice - deliveryFee - (numberOfProducts * 6 TND) - (free product cost if applicable)
-                const profit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
-                return sum + Math.max(0, profit) // Ensure profit is not negative
+                if (order.status === 'cancelled') return sum
+                
+                // Step 1: Calculate revenue (totalPrice - shipping)
+                const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+                
+                // Step 2: Calculate product costs (6 TND per product unit)
+                const numberOfProducts = order.orderSummary.totalItems
+                const productCosts = numberOfProducts * PRODUCT_COST
+                
+                // Step 3: Calculate free product cost (6 TND if 3+ products)
+                const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
+                
+                // Step 4: Calculate 1% deduction from revenue
+                const onePercentDeduction = revenue * 0.01
+                
+                // Step 5: Calculate profit
+                // Profit = Revenue - Product Costs - Free Product Cost - 1% Deduction
+                const profit = revenue - productCosts - freeProductCost - onePercentDeduction
+                
+                return sum + profit
+            }, 0)
+        }
+
+        // Calculate free products: 1 free product for orders with 3+ products
+        const calculateFreeProducts = (orderList: Order[]) => {
+            return orderList.reduce((sum, order) => {
+                if (order.status === 'cancelled') return sum
+                // 1 free product for orders with 3+ products
+                const freeProducts = order.orderSummary.totalItems >= 3 ? 1 : 0
+                return sum + freeProducts
             }, 0)
         }
 
@@ -265,55 +295,73 @@ export default function DashboardPage() {
         const daysBeforeOrders = filterOrdersByDate("days_before")
         const filteredOrders = filterOrdersByDate(dateFilter)
 
-        // Calculate total revenue without delivery
-        const totalRevenue = calculateRevenueWithoutDelivery(orders)
-        const totalProfit = calculateProfit(orders)
+        // Calculate totals
+        const totalRevenue = calculateRevenue(orders)
+        const totalProfit = calculateProfit(orders.filter(o => o.status !== 'cancelled'))
+        const totalFreeProducts = calculateFreeProducts(orders.filter(o => o.status !== 'cancelled'))
 
-        // Calculate today's revenue and profit without delivery
-        const todayRevenue = calculateRevenueWithoutDelivery(todayOrders)
-        const todayProfit = calculateProfit(todayOrders)
+        // Calculate today's revenue and profit
+        const todayRevenue = calculateRevenue(todayOrders)
+        const todayProfit = calculateProfit(todayOrders.filter(o => o.status !== 'cancelled'))
+        const todayFreeProducts = calculateFreeProducts(todayOrders.filter(o => o.status !== 'cancelled'))
         
         // Calculate yesterday's revenue and profit
-        const yesterdayRevenue = calculateRevenueWithoutDelivery(yesterdayOrders)
-        const yesterdayProfit = calculateProfit(yesterdayOrders)
+        const yesterdayRevenue = calculateRevenue(yesterdayOrders)
+        const yesterdayProfit = calculateProfit(yesterdayOrders.filter(o => o.status !== 'cancelled'))
+        const yesterdayFreeProducts = calculateFreeProducts(yesterdayOrders.filter(o => o.status !== 'cancelled'))
         
         // Calculate days before revenue and profit
-        const daysBeforeRevenue = calculateRevenueWithoutDelivery(daysBeforeOrders)
-        const daysBeforeProfit = calculateProfit(daysBeforeOrders)
+        const daysBeforeRevenue = calculateRevenue(daysBeforeOrders)
+        const daysBeforeProfit = calculateProfit(daysBeforeOrders.filter(o => o.status !== 'cancelled'))
+        const daysBeforeFreeProducts = calculateFreeProducts(daysBeforeOrders.filter(o => o.status !== 'cancelled'))
         
         // Calculate filtered revenue and profit based on date filter
-        const filteredRevenue = calculateRevenueWithoutDelivery(filteredOrders)
-        const filteredProfit = calculateProfit(filteredOrders)
+        const filteredRevenue = calculateRevenue(filteredOrders)
+        const filteredProfit = calculateProfit(filteredOrders.filter(o => o.status !== 'cancelled'))
+        const filteredFreeProducts = calculateFreeProducts(filteredOrders.filter(o => o.status !== 'cancelled'))
 
-        // Calculate revenue by status without delivery (subtract 8 TND per order) and exclude 1%
+        // Calculate revenue and profit by status
         const revenueByStatus: { [key: string]: number } = {}
         const profitByStatus: { [key: string]: number } = {}
         filteredOrders.forEach(order => {
-            const revenue = (order.orderSummary.totalPrice - DELIVERY_FEE) * 0.99
+            if (order.status === 'cancelled') return
+            
+            // Revenue = totalPrice - shipping
+            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
             revenueByStatus[order.status] = (revenueByStatus[order.status] || 0) + Math.max(0, revenue)
             
-            // Calculate profit for this order (with free product if 3+ products)
-            const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
-            const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
-            const profit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
-            profitByStatus[order.status] = (profitByStatus[order.status] || 0) + Math.max(0, profit)
+            // Profit calculation
+            const numberOfProducts = order.orderSummary.totalItems
+            const productCosts = numberOfProducts * PRODUCT_COST
+            const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
+            const onePercentDeduction = revenue * 0.01
+            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
+            
+            profitByStatus[order.status] = (profitByStatus[order.status] || 0) + profit
         })
 
-        // Calculate revenue and profit by city without delivery (subtract 8 TND per order) and exclude 1%
+        // Calculate revenue and profit by city
         const revenueByCityMap: { [key: string]: { count: number; revenue: number; profit: number } } = {}
         filteredOrders.forEach(order => {
+            if (order.status === 'cancelled') return
             const city = order.customer.city
-            const revenue = (order.orderSummary.totalPrice - DELIVERY_FEE) * 0.99
-            const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
-            const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
-            const profit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
+            
+            // Revenue = totalPrice - shipping
+            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            
+            // Profit calculation
+            const numberOfProducts = order.orderSummary.totalItems
+            const productCosts = numberOfProducts * PRODUCT_COST
+            const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
+            const onePercentDeduction = revenue * 0.01
+            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
             
             if (!revenueByCityMap[city]) {
                 revenueByCityMap[city] = { count: 0, revenue: 0, profit: 0 }
             }
             revenueByCityMap[city].count++
             revenueByCityMap[city].revenue += Math.max(0, revenue)
-            revenueByCityMap[city].profit += Math.max(0, profit)
+            revenueByCityMap[city].profit += profit
         })
         const ordersByCity = Object.entries(revenueByCityMap).map(([_id, data]) => ({
             _id,
@@ -322,13 +370,19 @@ export default function DashboardPage() {
             profit: data.profit
         }))
 
-        // Calculate revenue and profit by product without delivery (subtract 8 TND per order, exclude 1%, distributed proportionally)
+        // Calculate revenue and profit by product (distributed proportionally)
         const productRevenueMap: { [key: string]: { totalQuantity: number; totalRevenue: number; totalProfit: number; orderCount: number } } = {}
         filteredOrders.forEach(order => {
-            const orderRevenue = (order.orderSummary.totalPrice - DELIVERY_FEE) * 0.99
-            const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
-            const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
-            const orderProfit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
+            if (order.status === 'cancelled') return
+            
+            // Calculate order-level revenue and profit
+            const orderRevenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const numberOfProducts = order.orderSummary.totalItems
+            const productCosts = numberOfProducts * PRODUCT_COST
+            const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
+            const onePercentDeduction = orderRevenue * 0.01
+            const orderProfit = orderRevenue - productCosts - freeProductCost - onePercentDeduction
+            
             const orderTotalProducts = order.products.reduce((sum, p) => sum + (p.price * p.quantity), 0)
             
             order.products.forEach(product => {
@@ -341,7 +395,7 @@ export default function DashboardPage() {
                 if (orderTotalProducts > 0) {
                     const productShare = (product.price * product.quantity) / orderTotalProducts
                     productRevenueMap[productName].totalRevenue += Math.max(0, orderRevenue) * productShare
-                    productRevenueMap[productName].totalProfit += Math.max(0, orderProfit) * productShare
+                    productRevenueMap[productName].totalProfit += orderProfit * productShare
                 }
                 productRevenueMap[productName].orderCount++
             })
@@ -354,21 +408,28 @@ export default function DashboardPage() {
             orderCount: data.orderCount
         }))
 
-        // Calculate revenue and profit over time without delivery (subtract 8 TND per order) and exclude 1%
+        // Calculate revenue and profit over time
         const revenueOverTimeMap: { [key: string]: { count: number; revenue: number; profit: number } } = {}
         filteredOrders.forEach(order => {
+            if (order.status === 'cancelled') return
             const dateKey = new Date(order.orderDate || order.createdAt).toISOString().split('T')[0]
-            const revenue = (order.orderSummary.totalPrice - DELIVERY_FEE) * 0.99
-            const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
-            const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
-            const profit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
+            
+            // Revenue = totalPrice - shipping
+            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            
+            // Profit calculation
+            const numberOfProducts = order.orderSummary.totalItems
+            const productCosts = numberOfProducts * PRODUCT_COST
+            const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
+            const onePercentDeduction = revenue * 0.01
+            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
             
             if (!revenueOverTimeMap[dateKey]) {
                 revenueOverTimeMap[dateKey] = { count: 0, revenue: 0, profit: 0 }
             }
             revenueOverTimeMap[dateKey].count++
             revenueOverTimeMap[dateKey].revenue += Math.max(0, revenue)
-            revenueOverTimeMap[dateKey].profit += Math.max(0, profit)
+            revenueOverTimeMap[dateKey].profit += profit
         })
         const ordersOverTime = Object.entries(revenueOverTimeMap).map(([_id, data]) => ({
             _id,
@@ -379,11 +440,15 @@ export default function DashboardPage() {
 
         // Calculate average order value without delivery
         const avgOrderValue = filteredOrders.length > 0 ? filteredRevenue / filteredOrders.length : 0
+        const avgProfitPerOrder = filteredOrders.filter(o => o.status !== 'cancelled').length > 0 
+            ? filteredProfit / filteredOrders.filter(o => o.status !== 'cancelled').length 
+            : 0
 
         return {
             ...stats,
             totalRevenue: filteredRevenue, // Use filtered revenue based on date filter
             totalProfit: filteredProfit, // Use filtered profit based on date filter
+            totalFreeProducts,
             todayRevenue,
             todayProfit,
             yesterdayRevenue,
@@ -396,6 +461,7 @@ export default function DashboardPage() {
             topProducts,
             ordersOverTime,
             avgOrderValue,
+            avgProfitPerOrder,
             filteredOrdersCount: filteredOrders.length
         }
     }, [stats, orders, dateFilter])
@@ -1151,7 +1217,31 @@ export default function DashboardPage() {
                                                                 <div className="font-bold text-gray-900">{order.orderSummary.totalPrice.toFixed(2)} TND</div>
                                                             </td>
                                                             <td className="px-6 py-4 whitespace-nowrap">
-                                                                {getStatusBadge(order.status)}
+                                                                <div className="flex items-center gap-2">
+                                                                    {getStatusBadge(order.status)}
+                                                                    {order.note && order.note.trim() !== '' && (
+                                                                        <Dialog>
+                                                                            <DialogTrigger asChild>
+                                                                                <Button
+                                                                                    variant="outline"
+                                                                                    size="sm"
+                                                                                    className="h-7 px-2 text-xs text-amber-600 hover:text-amber-700 bg-amber-50 hover:bg-amber-100 border-amber-300"
+                                                                                >
+                                                                                    <FileText className="h-3.5 w-3.5 mr-1" />
+                                                                                    Note
+                                                                                </Button>
+                                                                            </DialogTrigger>
+                                                                            <DialogContent className="max-w-md bg-white border-gray-200">
+                                                                                <DialogHeader>
+                                                                                    <DialogTitle className="text-black font-semibold">Note - {order.orderNumber}</DialogTitle>
+                                                                                </DialogHeader>
+                                                                                <div className="mt-4">
+                                                                                    <p className="text-sm text-black whitespace-pre-wrap leading-relaxed">{order.note}</p>
+                                                                                </div>
+                                                                            </DialogContent>
+                                                                        </Dialog>
+                                                                    )}
+                                                                </div>
                                                             </td>
                                                             <td className="px-6 py-4 whitespace-nowrap">
                                                                 <div className="text-sm font-semibold text-gray-900">
@@ -1227,9 +1317,33 @@ export default function DashboardPage() {
                                                 return (
                                                     <div key={order._id} className="flex items-center justify-between border-b border-gray-200 pb-4 last:border-0">
                                                         <div>
-                                                            <Link href={`/dashboard/orders/${order._id}`} className="font-bold text-gray-900 hover:underline">
-                                                                {order.orderNumber}
-                                                            </Link>
+                                                            <div className="flex items-center gap-2">
+                                                                <Link href={`/dashboard/orders/${order._id}`} className="font-bold text-gray-900 hover:underline">
+                                                                    {order.orderNumber}
+                                                                </Link>
+                                                                {order.note && order.note.trim() !== '' && (
+                                                                    <Dialog>
+                                                                        <DialogTrigger asChild>
+                                                                            <Button
+                                                                                variant="outline"
+                                                                                size="sm"
+                                                                                className="h-6 px-2 text-xs text-amber-600 hover:text-amber-700 bg-amber-50 hover:bg-amber-100 border-amber-300"
+                                                                            >
+                                                                                <FileText className="h-3 w-3 mr-1" />
+                                                                                Note
+                                                                            </Button>
+                                                                        </DialogTrigger>
+                                                                        <DialogContent className="max-w-md bg-white border-gray-200">
+                                                                            <DialogHeader>
+                                                                                <DialogTitle className="text-black font-semibold">Note - {order.orderNumber}</DialogTitle>
+                                                                            </DialogHeader>
+                                                                            <div className="mt-4">
+                                                                                <p className="text-sm text-black whitespace-pre-wrap leading-relaxed">{order.note}</p>
+                                                                            </div>
+                                                                        </DialogContent>
+                                                                    </Dialog>
+                                                                )}
+                                                            </div>
                                                             <p className="text-sm text-gray-900">{order.customer.fullName} - {revenueWithoutDelivery.toFixed(2)} TND</p>
                                                             <p className="text-sm text-gray-900">
                                                                 {new Date(order.createdAt).toLocaleDateString('fr-FR')} à{' '}
