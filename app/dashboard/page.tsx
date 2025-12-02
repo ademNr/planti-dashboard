@@ -202,11 +202,11 @@ export default function DashboardPage() {
         const DELIVERY_FEE = 8 // Delivery fee in TND
         const PRODUCT_COST = 6 // Cost per product in TND
 
-        // Calculate revenue without delivery fees (subtract 8 TND per order)
+        // Calculate revenue without delivery fees (subtract 8 TND per order) and exclude 1%
         const calculateRevenueWithoutDelivery = (orderList: Order[]) => {
             return orderList.reduce((sum, order) => {
-                // Revenue = totalPrice - 8 TND delivery fee
-                const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+                // Revenue = (totalPrice - 8 TND delivery fee) * 0.99 (exclude 1%)
+                const revenue = (order.orderSummary.totalPrice - DELIVERY_FEE) * 0.99
                 return sum + Math.max(0, revenue) // Ensure revenue is not negative
             }, 0)
         }
@@ -285,11 +285,11 @@ export default function DashboardPage() {
         const filteredRevenue = calculateRevenueWithoutDelivery(filteredOrders)
         const filteredProfit = calculateProfit(filteredOrders)
 
-        // Calculate revenue by status without delivery (subtract 8 TND per order)
+        // Calculate revenue by status without delivery (subtract 8 TND per order) and exclude 1%
         const revenueByStatus: { [key: string]: number } = {}
         const profitByStatus: { [key: string]: number } = {}
         filteredOrders.forEach(order => {
-            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const revenue = (order.orderSummary.totalPrice - DELIVERY_FEE) * 0.99
             revenueByStatus[order.status] = (revenueByStatus[order.status] || 0) + Math.max(0, revenue)
             
             // Calculate profit for this order (with free product if 3+ products)
@@ -299,11 +299,11 @@ export default function DashboardPage() {
             profitByStatus[order.status] = (profitByStatus[order.status] || 0) + Math.max(0, profit)
         })
 
-        // Calculate revenue and profit by city without delivery (subtract 8 TND per order)
+        // Calculate revenue and profit by city without delivery (subtract 8 TND per order) and exclude 1%
         const revenueByCityMap: { [key: string]: { count: number; revenue: number; profit: number } } = {}
         filteredOrders.forEach(order => {
             const city = order.customer.city
-            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const revenue = (order.orderSummary.totalPrice - DELIVERY_FEE) * 0.99
             const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
             const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
             const profit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
@@ -322,10 +322,10 @@ export default function DashboardPage() {
             profit: data.profit
         }))
 
-        // Calculate revenue and profit by product without delivery (subtract 8 TND per order, distributed proportionally)
+        // Calculate revenue and profit by product without delivery (subtract 8 TND per order, exclude 1%, distributed proportionally)
         const productRevenueMap: { [key: string]: { totalQuantity: number; totalRevenue: number; totalProfit: number; orderCount: number } } = {}
         filteredOrders.forEach(order => {
-            const orderRevenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const orderRevenue = (order.orderSummary.totalPrice - DELIVERY_FEE) * 0.99
             const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
             const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
             const orderProfit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
@@ -354,11 +354,11 @@ export default function DashboardPage() {
             orderCount: data.orderCount
         }))
 
-        // Calculate revenue and profit over time without delivery (subtract 8 TND per order)
+        // Calculate revenue and profit over time without delivery (subtract 8 TND per order) and exclude 1%
         const revenueOverTimeMap: { [key: string]: { count: number; revenue: number; profit: number } } = {}
         filteredOrders.forEach(order => {
             const dateKey = new Date(order.orderDate || order.createdAt).toISOString().split('T')[0]
-            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const revenue = (order.orderSummary.totalPrice - DELIVERY_FEE) * 0.99
             const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
             const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
             const profit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
@@ -837,7 +837,7 @@ export default function DashboardPage() {
                                             </Select>
                                         </div>
                                         <div className="text-sm text-gray-900">
-                                            <span className="font-semibold">Note:</span> Le revenu exclut les frais de livraison (8 TND par commande). Le profit exclut également le coût de production (6 TND par produit).
+                                            <span className="font-semibold">Note:</span> Le revenu exclut les frais de livraison (8 TND par commande) et 1% de commission. Le profit exclut également le coût de production (6 TND par produit).
                                         </div>
                                     </div>
                                 </CardContent>
