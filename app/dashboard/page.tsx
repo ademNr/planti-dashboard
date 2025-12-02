@@ -2,7 +2,7 @@
 // app/dashboard/page.tsx
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -81,6 +81,7 @@ interface Order {
 interface DashboardStats {
     totalOrders: number
     totalRevenue: number
+    totalProfit?: number
     pendingOrders: number
     confirmedOrders: number
     preparingOrders: number
@@ -90,16 +91,25 @@ interface DashboardStats {
     avgOrderValue: number
     todayOrders: number
     todayRevenue: number
+    todayProfit?: number
+    yesterdayRevenue?: number
+    yesterdayProfit?: number
+    daysBeforeRevenue?: number
+    daysBeforeProfit?: number
+    filteredOrdersCount?: number
     ordersByStatus: {
         [key: string]: number
     }
     revenueByStatus: {
         [key: string]: number
     }
-    ordersByCity: { _id: string; count: number; revenue: number }[]
-    topProducts: { _id: string; totalQuantity: number; totalRevenue: number; orderCount: number }[]
+    profitByStatus?: {
+        [key: string]: number
+    }
+    ordersByCity: { _id: string; count: number; revenue: number; profit?: number }[]
+    topProducts: { _id: string; totalQuantity: number; totalRevenue: number; totalProfit?: number; orderCount: number }[]
     recentOrders: Order[]
-    ordersOverTime: { _id: string; count: number; revenue: number }[]
+    ordersOverTime: { _id: string; count: number; revenue: number; profit?: number }[]
 }
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
@@ -133,6 +143,7 @@ export default function DashboardPage() {
     const [searchTerm, setSearchTerm] = useState("")
     const [statusFilter, setStatusFilter] = useState("all")
     const [cityFilter, setCityFilter] = useState("")
+    const [dateFilter, setDateFilter] = useState<"all" | "today" | "yesterday" | "days_before">("all")
     const [isAddOrderOpen, setIsAddOrderOpen] = useState(false)
     const [addingOrder, setAddingOrder] = useState(false)
 
@@ -183,6 +194,211 @@ export default function DashboardPage() {
             console.error("Error fetching stats:", error)
         }
     }
+
+    // Calculate revenue and profit excluding delivery fees and product costs
+    const adjustedStats = useMemo(() => {
+        if (!stats || !orders.length) return stats
+
+        const DELIVERY_FEE = 8 // Delivery fee in TND
+        const PRODUCT_COST = 6 // Cost per product in TND
+
+        // Calculate revenue without delivery fees (subtract 8 TND per order)
+        const calculateRevenueWithoutDelivery = (orderList: Order[]) => {
+            return orderList.reduce((sum, order) => {
+                // Revenue = totalPrice - 8 TND delivery fee
+                const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+                return sum + Math.max(0, revenue) // Ensure revenue is not negative
+            }, 0)
+        }
+
+        // Calculate profit: totalPrice - deliveryFee - (numberOfProducts * PRODUCT_COST) - (free product cost if 3+ products)
+        const calculateProfit = (orderList: Order[]) => {
+            return orderList.reduce((sum, order) => {
+                // Count total number of products in the order (sum of quantities)
+                const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
+                // If order has 3 or more products, one product is free (subtract additional 6 TND)
+                const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
+                // Profit = totalPrice - deliveryFee - (numberOfProducts * 6 TND) - (free product cost if applicable)
+                const profit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
+                return sum + Math.max(0, profit) // Ensure profit is not negative
+            }, 0)
+        }
+
+        // Get today's date
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+
+        // Get yesterday's date
+        const yesterday = new Date(today)
+        yesterday.setDate(yesterday.getDate() - 1)
+
+        // Filter orders by date
+        type DateFilterType = "all" | "today" | "yesterday" | "days_before"
+        const filterOrdersByDate = (filter: DateFilterType) => {
+            switch (filter) {
+                case "today":
+                    return orders.filter(order => {
+                        const orderDate = new Date(order.orderDate || order.createdAt)
+                        orderDate.setHours(0, 0, 0, 0)
+                        return orderDate.getTime() === today.getTime()
+                    })
+                case "yesterday":
+                    return orders.filter(order => {
+                        const orderDate = new Date(order.orderDate || order.createdAt)
+                        orderDate.setHours(0, 0, 0, 0)
+                        return orderDate.getTime() === yesterday.getTime()
+                    })
+                case "days_before":
+                    return orders.filter(order => {
+                        const orderDate = new Date(order.orderDate || order.createdAt)
+                        orderDate.setHours(0, 0, 0, 0)
+                        return orderDate.getTime() < yesterday.getTime()
+                    })
+                default:
+                    return orders
+            }
+        }
+
+        // Filter today's orders
+        const todayOrders = filterOrdersByDate("today")
+        const yesterdayOrders = filterOrdersByDate("yesterday")
+        const daysBeforeOrders = filterOrdersByDate("days_before")
+        const filteredOrders = filterOrdersByDate(dateFilter)
+
+        // Calculate total revenue without delivery
+        const totalRevenue = calculateRevenueWithoutDelivery(orders)
+        const totalProfit = calculateProfit(orders)
+
+        // Calculate today's revenue and profit without delivery
+        const todayRevenue = calculateRevenueWithoutDelivery(todayOrders)
+        const todayProfit = calculateProfit(todayOrders)
+        
+        // Calculate yesterday's revenue and profit
+        const yesterdayRevenue = calculateRevenueWithoutDelivery(yesterdayOrders)
+        const yesterdayProfit = calculateProfit(yesterdayOrders)
+        
+        // Calculate days before revenue and profit
+        const daysBeforeRevenue = calculateRevenueWithoutDelivery(daysBeforeOrders)
+        const daysBeforeProfit = calculateProfit(daysBeforeOrders)
+        
+        // Calculate filtered revenue and profit based on date filter
+        const filteredRevenue = calculateRevenueWithoutDelivery(filteredOrders)
+        const filteredProfit = calculateProfit(filteredOrders)
+
+        // Calculate revenue by status without delivery (subtract 8 TND per order)
+        const revenueByStatus: { [key: string]: number } = {}
+        const profitByStatus: { [key: string]: number } = {}
+        filteredOrders.forEach(order => {
+            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            revenueByStatus[order.status] = (revenueByStatus[order.status] || 0) + Math.max(0, revenue)
+            
+            // Calculate profit for this order (with free product if 3+ products)
+            const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
+            const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
+            const profit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
+            profitByStatus[order.status] = (profitByStatus[order.status] || 0) + Math.max(0, profit)
+        })
+
+        // Calculate revenue and profit by city without delivery (subtract 8 TND per order)
+        const revenueByCityMap: { [key: string]: { count: number; revenue: number; profit: number } } = {}
+        filteredOrders.forEach(order => {
+            const city = order.customer.city
+            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
+            const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
+            const profit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
+            
+            if (!revenueByCityMap[city]) {
+                revenueByCityMap[city] = { count: 0, revenue: 0, profit: 0 }
+            }
+            revenueByCityMap[city].count++
+            revenueByCityMap[city].revenue += Math.max(0, revenue)
+            revenueByCityMap[city].profit += Math.max(0, profit)
+        })
+        const ordersByCity = Object.entries(revenueByCityMap).map(([_id, data]) => ({
+            _id,
+            count: data.count,
+            revenue: data.revenue,
+            profit: data.profit
+        }))
+
+        // Calculate revenue and profit by product without delivery (subtract 8 TND per order, distributed proportionally)
+        const productRevenueMap: { [key: string]: { totalQuantity: number; totalRevenue: number; totalProfit: number; orderCount: number } } = {}
+        filteredOrders.forEach(order => {
+            const orderRevenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
+            const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
+            const orderProfit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
+            const orderTotalProducts = order.products.reduce((sum, p) => sum + (p.price * p.quantity), 0)
+            
+            order.products.forEach(product => {
+                const productName = product.name
+                if (!productRevenueMap[productName]) {
+                    productRevenueMap[productName] = { totalQuantity: 0, totalRevenue: 0, totalProfit: 0, orderCount: 0 }
+                }
+                productRevenueMap[productName].totalQuantity += product.quantity
+                // Distribute revenue and profit proportionally (product share of order revenue/profit)
+                if (orderTotalProducts > 0) {
+                    const productShare = (product.price * product.quantity) / orderTotalProducts
+                    productRevenueMap[productName].totalRevenue += Math.max(0, orderRevenue) * productShare
+                    productRevenueMap[productName].totalProfit += Math.max(0, orderProfit) * productShare
+                }
+                productRevenueMap[productName].orderCount++
+            })
+        })
+        const topProducts = Object.entries(productRevenueMap).map(([_id, data]) => ({
+            _id,
+            totalQuantity: data.totalQuantity,
+            totalRevenue: data.totalRevenue,
+            totalProfit: data.totalProfit,
+            orderCount: data.orderCount
+        }))
+
+        // Calculate revenue and profit over time without delivery (subtract 8 TND per order)
+        const revenueOverTimeMap: { [key: string]: { count: number; revenue: number; profit: number } } = {}
+        filteredOrders.forEach(order => {
+            const dateKey = new Date(order.orderDate || order.createdAt).toISOString().split('T')[0]
+            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const numberOfProducts = order.products.reduce((total, product) => total + product.quantity, 0)
+            const freeProductCost = numberOfProducts >= 3 ? PRODUCT_COST : 0
+            const profit = order.orderSummary.totalPrice - DELIVERY_FEE - (numberOfProducts * PRODUCT_COST) - freeProductCost
+            
+            if (!revenueOverTimeMap[dateKey]) {
+                revenueOverTimeMap[dateKey] = { count: 0, revenue: 0, profit: 0 }
+            }
+            revenueOverTimeMap[dateKey].count++
+            revenueOverTimeMap[dateKey].revenue += Math.max(0, revenue)
+            revenueOverTimeMap[dateKey].profit += Math.max(0, profit)
+        })
+        const ordersOverTime = Object.entries(revenueOverTimeMap).map(([_id, data]) => ({
+            _id,
+            count: data.count,
+            revenue: data.revenue,
+            profit: data.profit
+        }))
+
+        // Calculate average order value without delivery
+        const avgOrderValue = filteredOrders.length > 0 ? filteredRevenue / filteredOrders.length : 0
+
+        return {
+            ...stats,
+            totalRevenue: filteredRevenue, // Use filtered revenue based on date filter
+            totalProfit: filteredProfit, // Use filtered profit based on date filter
+            todayRevenue,
+            todayProfit,
+            yesterdayRevenue,
+            yesterdayProfit,
+            daysBeforeRevenue,
+            daysBeforeProfit,
+            revenueByStatus,
+            profitByStatus,
+            ordersByCity,
+            topProducts,
+            ordersOverTime,
+            avgOrderValue,
+            filteredOrdersCount: filteredOrders.length
+        }
+    }, [stats, orders, dateFilter])
 
     const updateOrderStatus = async (orderId: string, newStatus: Order['status']) => {
         try {
@@ -503,7 +719,7 @@ export default function DashboardPage() {
                                                                             type="number"
                                                                             step="0.01"
                                                                             placeholder="Ex: 29.99"
-                                                                            value={field.value === 0 || isNaN(field.value) ? "" : field.value}
+                                                                            value={field.value === undefined || field.value === 0 || isNaN(field.value) ? "" : String(field.value)}
                                                                             onChange={(e) => {
                                                                                 const value = e.target.valueAsNumber;
                                                                                 field.onChange(isNaN(value) ? 0 : value);
@@ -526,7 +742,7 @@ export default function DashboardPage() {
                                                                             type="number"
                                                                             min="1"
                                                                             placeholder="Ex: 1"
-                                                                            value={field.value === 0 || isNaN(field.value) ? "" : field.value}
+                                                                            value={field.value === undefined || field.value === 0 || isNaN(field.value) ? "" : String(field.value)}
                                                                             onChange={(e) => {
                                                                                 const value = e.target.valueAsNumber;
                                                                                 field.onChange(isNaN(value) || value < 1 ? 1 : value);
@@ -600,48 +816,96 @@ export default function DashboardPage() {
                     </div>
 
                     {/* Stats Cards */}
-                    {stats && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6 mb-8">
-                            <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
-                                <CardContent className="p-6">
+                    {adjustedStats && (
+                        <>
+                            {/* Date Filter for Revenue */}
+                            <Card className="bg-white border-gray-200 mb-6">
+                                <CardContent className="p-4">
                                     <div className="flex items-center justify-between">
-                                        <div>
-                                            <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Total Commandes</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{stats.totalOrders}</p>
-                                            <p className="text-sm text-emerald-600 mt-2 flex items-center gap-1 font-medium">
-                                                <TrendingUp className="h-3.5 w-3.5" />
-                                                +{stats.todayOrders} aujourd'hui
-                                            </p>
+                                        <div className="flex items-center gap-4">
+                                            <Label htmlFor="date-filter" className="text-sm font-semibold text-gray-900">Filtrer le revenu par période:</Label>
+                                            <Select value={dateFilter} onValueChange={(value: typeof dateFilter) => setDateFilter(value)}>
+                                                <SelectTrigger id="date-filter" className="w-48 border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="all">Toutes les périodes</SelectItem>
+                                                    <SelectItem value="today">Aujourd'hui</SelectItem>
+                                                    <SelectItem value="yesterday">Hier</SelectItem>
+                                                    <SelectItem value="days_before">Jours précédents</SelectItem>
+                                                </SelectContent>
+                                            </Select>
                                         </div>
-                                        <div className="p-4 bg-blue-100 rounded-xl">
-                                            <ShoppingCart className="h-7 w-7 text-blue-600" />
+                                        <div className="text-sm text-gray-900">
+                                            <span className="font-semibold">Note:</span> Le revenu exclut les frais de livraison (8 TND par commande). Le profit exclut également le coût de production (6 TND par produit).
                                         </div>
                                     </div>
                                 </CardContent>
                             </Card>
-                            <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
-                                <CardContent className="p-6">
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Revenu Total</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{stats.totalRevenue.toFixed(2)} TND</p>
-                                            <p className="text-sm text-emerald-600 mt-2 flex items-center gap-1 font-medium">
-                                                <TrendingUp className="h-3.5 w-3.5" />
-                                                +{stats.todayRevenue.toFixed(2)} aujourd'hui
-                                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 mb-8">
+                                <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
+                                    <CardContent className="p-6">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Total Commandes</p>
+                                                <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.filteredOrdersCount || adjustedStats.totalOrders}</p>
+                                                <p className="text-sm text-emerald-600 mt-2 flex items-center gap-1 font-medium">
+                                                    <TrendingUp className="h-3.5 w-3.5" />
+                                                    +{adjustedStats.todayOrders} aujourd'hui
+                                                </p>
+                                            </div>
+                                            <div className="p-4 bg-blue-100 rounded-xl">
+                                                <ShoppingCart className="h-7 w-7 text-blue-600" />
+                                            </div>
                                         </div>
-                                        <div className="p-4 bg-emerald-100 rounded-xl">
-                                            <DollarSign className="h-7 w-7 text-emerald-600" />
+                                    </CardContent>
+                                </Card>
+                                <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
+                                    <CardContent className="p-6">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Revenu Total</p>
+                                                <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.totalRevenue.toFixed(2)} TND</p>
+                                                <p className="text-sm text-emerald-600 mt-2 flex items-center gap-1 font-medium">
+                                                    <TrendingUp className="h-3.5 w-3.5" />
+                                                    {dateFilter === "today" && `Aujourd'hui: ${adjustedStats.totalRevenue.toFixed(2)} TND`}
+                                                    {dateFilter === "yesterday" && `Hier: ${adjustedStats.yesterdayRevenue?.toFixed(2) || "0.00"} TND`}
+                                                    {dateFilter === "days_before" && `Jours précédents: ${adjustedStats.daysBeforeRevenue?.toFixed(2) || "0.00"} TND`}
+                                                    {dateFilter === "all" && `Aujourd'hui: ${adjustedStats.todayRevenue.toFixed(2)} TND`}
+                                                </p>
+                                            </div>
+                                            <div className="p-4 bg-emerald-100 rounded-xl">
+                                                <DollarSign className="h-7 w-7 text-emerald-600" />
+                                            </div>
                                         </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
+                                    </CardContent>
+                                </Card>
+                                <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
+                                    <CardContent className="p-6">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Profit Total</p>
+                                                <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.totalProfit?.toFixed(2) || "0.00"} TND</p>
+                                                <p className="text-sm text-green-600 mt-2 flex items-center gap-1 font-medium">
+                                                    <TrendingUp className="h-3.5 w-3.5" />
+                                                    {dateFilter === "today" && `Aujourd'hui: ${adjustedStats.todayProfit?.toFixed(2) || "0.00"} TND`}
+                                                    {dateFilter === "yesterday" && `Hier: ${adjustedStats.yesterdayProfit?.toFixed(2) || "0.00"} TND`}
+                                                    {dateFilter === "days_before" && `Jours précédents: ${adjustedStats.daysBeforeProfit?.toFixed(2) || "0.00"} TND`}
+                                                    {dateFilter === "all" && `Aujourd'hui: ${adjustedStats.todayProfit?.toFixed(2) || "0.00"} TND`}
+                                                </p>
+                                            </div>
+                                            <div className="p-4 bg-green-100 rounded-xl">
+                                                <BarChart3 className="h-7 w-7 text-green-600" />
+                                            </div>
+                                        </div>
+                                    </CardContent>
+                                </Card>
                             <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
                                 <CardContent className="p-6">
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">En Attente</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{stats.pendingOrders}</p>
+                                            <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.pendingOrders}</p>
                                             <p className="text-sm text-gray-900 mt-2 font-medium">À traiter</p>
                                         </div>
                                         <div className="p-4 bg-amber-100 rounded-xl">
@@ -655,7 +919,7 @@ export default function DashboardPage() {
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Confirmées</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{stats.confirmedOrders}</p>
+                                            <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.confirmedOrders}</p>
                                             <p className="text-sm text-gray-900 mt-2 font-medium">À préparer</p>
                                         </div>
                                         <div className="p-4 bg-blue-100 rounded-xl">
@@ -669,7 +933,7 @@ export default function DashboardPage() {
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">En Préparation</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{stats.preparingOrders}</p>
+                                            <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.preparingOrders}</p>
                                             <p className="text-sm text-gray-900 mt-2 font-medium">En cours</p>
                                         </div>
                                         <div className="p-4 bg-orange-100 rounded-xl">
@@ -683,7 +947,7 @@ export default function DashboardPage() {
                                     <div className="flex items-center justify-between">
                                         <div>
                                             <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Expédiées</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{stats.shippedOrders}</p>
+                                            <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.shippedOrders}</p>
                                             <p className="text-sm text-gray-900 mt-2 font-medium">En transit</p>
                                         </div>
                                         <div className="p-4 bg-purple-100 rounded-xl">
@@ -694,6 +958,7 @@ export default function DashboardPage() {
                             </Card>
 
                         </div>
+                        </>
                     )}
 
                     {/* Tabs */}
@@ -720,7 +985,7 @@ export default function DashboardPage() {
                         </TabsList>
 
                         <TabsContent value="analytics" className="mt-6">
-                            {stats && (
+                            {adjustedStats && (
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                     <Card className="bg-white border-gray-200">
                                         <CardHeader>
@@ -729,7 +994,7 @@ export default function DashboardPage() {
                                         </CardHeader>
                                         <CardContent>
                                             <ResponsiveContainer width="100%" height={300}>
-                                                <BarChart data={stats.topProducts}>
+                                                <BarChart data={adjustedStats.topProducts}>
                                                     <CartesianGrid strokeDasharray="3 3" />
                                                     <XAxis dataKey="_id" angle={-45} textAnchor="end" height={70} />
                                                     <YAxis />
@@ -737,6 +1002,7 @@ export default function DashboardPage() {
                                                     <Legend />
                                                     <Bar dataKey="totalQuantity" name="Quantité" fill="#3b82f6" />
                                                     <Bar dataKey="totalRevenue" name="Revenu (TND)" fill="#22c55e" />
+                                                    <Bar dataKey="totalProfit" name="Profit (TND)" fill="#10b981" />
                                                 </BarChart>
                                             </ResponsiveContainer>
                                         </CardContent>
@@ -750,7 +1016,7 @@ export default function DashboardPage() {
                                             <ResponsiveContainer width="100%" height={300}>
                                                 <PieChart>
                                                     <Pie
-                                                        data={Object.entries(stats.revenueByStatus).map(([key, value]) => ({ name: key, value }))}
+                                                        data={Object.entries(adjustedStats.revenueByStatus).map(([key, value]) => ({ name: key, value }))}
                                                         cx="50%"
                                                         cy="50%"
                                                         labelLine={false}
@@ -759,7 +1025,7 @@ export default function DashboardPage() {
                                                         dataKey="value"
                                                         label={({ name, percent }) => `${name} ${(percent as any * 100).toFixed(0)}% `}
                                                     >
-                                                        {Object.entries(stats.revenueByStatus).map((entry, index) => (
+                                                        {Object.entries(adjustedStats.revenueByStatus).map((entry, index) => (
                                                             <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                                                         ))}
                                                     </Pie>
@@ -953,23 +1219,27 @@ export default function DashboardPage() {
                                     <CardDescription className="text-gray-900">Les 5 dernières commandes</CardDescription>
                                 </CardHeader>
                                 <CardContent>
-                                    {stats && stats.recentOrders && stats.recentOrders.length > 0 ? (
+                                    {adjustedStats && adjustedStats.recentOrders && adjustedStats.recentOrders.length > 0 ? (
                                         <div className="space-y-4">
-                                            {stats.recentOrders.map((order) => (
-                                                <div key={order._id} className="flex items-center justify-between border-b border-gray-200 pb-4 last:border-0">
-                                                    <div>
-                                                        <Link href={`/dashboard/orders/${order._id}`} className="font-bold text-gray-900 hover:underline">
-                                                            {order.orderNumber}
-                                                        </Link>
-                                                        <p className="text-sm text-gray-900">{order.customer.fullName} - {order.orderSummary.totalPrice.toFixed(2)} TND</p>
-                                                        <p className="text-sm text-gray-900">
-                                                            {new Date(order.createdAt).toLocaleDateString('fr-FR')} à{' '}
-                                                            {new Date(order.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-                                                        </p>
+                                            {adjustedStats.recentOrders.map((order) => {
+                                                // Subtract 8 TND delivery fee from total price
+                                                const revenueWithoutDelivery = Math.max(0, order.orderSummary.totalPrice - 8)
+                                                return (
+                                                    <div key={order._id} className="flex items-center justify-between border-b border-gray-200 pb-4 last:border-0">
+                                                        <div>
+                                                            <Link href={`/dashboard/orders/${order._id}`} className="font-bold text-gray-900 hover:underline">
+                                                                {order.orderNumber}
+                                                            </Link>
+                                                            <p className="text-sm text-gray-900">{order.customer.fullName} - {revenueWithoutDelivery.toFixed(2)} TND</p>
+                                                            <p className="text-sm text-gray-900">
+                                                                {new Date(order.createdAt).toLocaleDateString('fr-FR')} à{' '}
+                                                                {new Date(order.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                                                            </p>
+                                                        </div>
+                                                        {getStatusBadge(order.status)}
                                                     </div>
-                                                    {getStatusBadge(order.status)}
-                                                </div>
-                                            ))}
+                                                )
+                                            })}
                                         </div>
                                     ) : (
                                         <div className="text-center py-8">
