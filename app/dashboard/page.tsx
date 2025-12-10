@@ -17,7 +17,8 @@ import * as z from "zod"
 import {
     Package, DollarSign, ShoppingCart, Search,
     Eye, Truck, CheckCircle, Clock, XCircle, RefreshCw,
-    BarChart3, MapPin, Phone, TrendingUp, User, CreditCard, FileText
+    BarChart3, MapPin, Phone, TrendingUp, User, CreditCard, FileText, Gift, Leaf,
+    Users, Repeat, Calendar, Activity, Target
 } from "lucide-react"
 import { DashboardHeader } from "@/components/header"
 import Link from "next/link"
@@ -36,7 +37,6 @@ import {
     Pie,
     Cell
 } from 'recharts'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 interface OrderProduct {
     productId: string
@@ -115,6 +115,30 @@ interface DashboardStats {
     topProducts: { _id: string; totalQuantity: number; totalRevenue: number; totalProfit?: number; orderCount: number }[]
     recentOrders: Order[]
     ordersOverTime: { _id: string; count: number; revenue: number; profit?: number }[]
+    soldCansByStatus?: {
+        all: number
+        pending: number
+        confirmed: number
+        preparing: number
+        shipped: number
+        delivered: number
+    }
+    cansByPlantType?: { name: string; count: number }[]
+    allPlantTypes?: string[]
+    soldCansForSelectedPlantType?: number
+    ordersByHour?: { hour: number; hourLabel: string; count: number }[]
+    ordersByDayOfWeek?: { day: string; dayIndex: number; count: number; revenue: number }[]
+    uniqueCustomersCount?: number
+    repeatCustomersCount?: number
+    avgOrdersPerCustomer?: number
+    conversionRate?: number
+    avgItemsPerOrder?: number
+    avgDailyRevenue?: number
+    avgDailyProfit?: number
+    avgWeeklyRevenue?: number
+    avgWeeklyProfit?: number
+    avgMonthlyRevenue?: number
+    avgMonthlyProfit?: number
 }
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
@@ -149,6 +173,10 @@ export default function DashboardPage() {
     const [statusFilter, setStatusFilter] = useState("all")
     const [cityFilter, setCityFilter] = useState("")
     const [dateFilter, setDateFilter] = useState<"all" | "today" | "yesterday" | "days_before">("all")
+    const [cansStatusFilter, setCansStatusFilter] = useState<"all" | "pending" | "confirmed" | "preparing" | "shipped" | "delivered">("all")
+    const [plantTypeFilter, setPlantTypeFilter] = useState<string>("all")
+    const [averagesStatusFilter, setAveragesStatusFilter] = useState<"all" | "pending" | "confirmed" | "preparing" | "shipped" | "delivered">("all")
+    const [activeTab, setActiveTab] = useState<"analytics" | "orders">("analytics")
     const [isAddOrderOpen, setIsAddOrderOpen] = useState(false)
     const [addingOrder, setAddingOrder] = useState(false)
 
@@ -444,6 +472,217 @@ export default function DashboardPage() {
             ? filteredProfit / filteredOrders.filter(o => o.status !== 'cancelled').length 
             : 0
 
+        // Calculate sold cans by status
+        const calculateSoldCans = (orderList: Order[], statusFilter: "all" | "pending" | "confirmed" | "preparing" | "shipped" | "delivered") => {
+            return orderList.reduce((sum, order) => {
+                if (order.status === 'cancelled') return sum
+                if (statusFilter !== 'all' && order.status !== statusFilter) return sum
+                return sum + order.orderSummary.totalItems
+            }, 0)
+        }
+
+        const soldCansByStatus = {
+            all: calculateSoldCans(orders, "all"),
+            pending: calculateSoldCans(orders, "pending"),
+            confirmed: calculateSoldCans(orders, "confirmed"),
+            preparing: calculateSoldCans(orders, "preparing"),
+            shipped: calculateSoldCans(orders, "shipped"),
+            delivered: calculateSoldCans(orders, "delivered")
+        }
+
+        // Calculate cans by plant type (filtered by status)
+        const cansByPlantTypeMap: { [key: string]: number } = {}
+        orders.forEach(order => {
+            if (order.status === 'cancelled') return
+            // Apply status filter if not "all"
+            if (cansStatusFilter !== 'all' && order.status !== cansStatusFilter) return
+            order.products.forEach(product => {
+                const plantType = product.name
+                if (!cansByPlantTypeMap[plantType]) {
+                    cansByPlantTypeMap[plantType] = 0
+                }
+                cansByPlantTypeMap[plantType] += product.quantity
+            })
+        })
+
+        const cansByPlantType = Object.entries(cansByPlantTypeMap).map(([name, count]) => ({
+            name,
+            count
+        })).sort((a, b) => b.count - a.count)
+
+        // Get all unique plant types
+        const allPlantTypes = Array.from(new Set(orders.flatMap(order => 
+            order.products.map(p => p.name)
+        ))).sort()
+
+        // Calculate sold cans for selected plant type
+        const soldCansForSelectedPlantType = plantTypeFilter === "all" 
+            ? soldCansByStatus[cansStatusFilter]
+            : orders.reduce((sum, order) => {
+                if (order.status === 'cancelled') return sum
+                if (cansStatusFilter !== 'all' && order.status !== cansStatusFilter) return sum
+                return sum + order.products
+                    .filter(p => p.name === plantTypeFilter)
+                    .reduce((productSum, p) => productSum + p.quantity, 0)
+            }, 0)
+
+        // Timeline Analysis - Orders by Hour of Day
+        const ordersByHour: { [key: number]: number } = {}
+        filteredOrders.forEach(order => {
+            if (order.status === 'cancelled') return
+            const orderDate = new Date(order.orderDate || order.createdAt)
+            const hour = orderDate.getHours()
+            ordersByHour[hour] = (ordersByHour[hour] || 0) + 1
+        })
+        const ordersByHourArray = Array.from({ length: 24 }, (_, i) => ({
+            hour: i,
+            hourLabel: `${i.toString().padStart(2, '0')}:00`,
+            count: ordersByHour[i] || 0
+        }))
+
+        // Timeline Analysis - Orders by Day of Week
+        const dayNames = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi']
+        const ordersByDayOfWeek: { [key: number]: { count: number; revenue: number } } = {}
+        filteredOrders.forEach(order => {
+            if (order.status === 'cancelled') return
+            const orderDate = new Date(order.orderDate || order.createdAt)
+            const dayOfWeek = orderDate.getDay()
+            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            if (!ordersByDayOfWeek[dayOfWeek]) {
+                ordersByDayOfWeek[dayOfWeek] = { count: 0, revenue: 0 }
+            }
+            ordersByDayOfWeek[dayOfWeek].count++
+            ordersByDayOfWeek[dayOfWeek].revenue += Math.max(0, revenue)
+        })
+        const ordersByDayOfWeekArray = dayNames.map((dayName, index) => ({
+            day: dayName,
+            dayIndex: index,
+            count: ordersByDayOfWeek[index]?.count || 0,
+            revenue: ordersByDayOfWeek[index]?.revenue || 0
+        }))
+
+        // Customer Metrics
+        const uniqueCustomers = new Set(filteredOrders
+            .filter(o => o.status !== 'cancelled')
+            .map(o => o.customer.email || o.customer.phone))
+        const customerOrderCount: { [key: string]: number } = {}
+        filteredOrders.forEach(order => {
+            if (order.status === 'cancelled') return
+            const customerId = order.customer.email || order.customer.phone
+            customerOrderCount[customerId] = (customerOrderCount[customerId] || 0) + 1
+        })
+        const repeatCustomers = Object.values(customerOrderCount).filter(count => count > 1).length
+        const avgOrdersPerCustomer = uniqueCustomers.size > 0 
+            ? filteredOrders.filter(o => o.status !== 'cancelled').length / uniqueCustomers.size 
+            : 0
+
+        // Conversion Rate Metrics (based on order status progression)
+        const conversionRate = filteredOrders.length > 0
+            ? ((filteredOrders.filter(o => o.status === 'delivered').length / filteredOrders.filter(o => o.status !== 'cancelled').length) * 100)
+            : 0
+
+        // Average items per order
+        const avgItemsPerOrder = filteredOrders.filter(o => o.status !== 'cancelled').length > 0
+            ? filteredOrders.filter(o => o.status !== 'cancelled').reduce((sum, o) => sum + o.orderSummary.totalItems, 0) / filteredOrders.filter(o => o.status !== 'cancelled').length
+            : 0
+
+        // Calculate average daily, weekly, and monthly revenue and profit (excluding cancelled orders)
+        const validOrders = orders.filter(o => {
+            if (o.status === 'cancelled') return false
+            if (averagesStatusFilter !== 'all' && o.status !== averagesStatusFilter) return false
+            return true
+        })
+        
+        // Group orders by date
+        const ordersByDate: { [key: string]: { revenue: number; profit: number; count: number } } = {}
+        validOrders.forEach(order => {
+            const dateKey = new Date(order.orderDate || order.createdAt).toISOString().split('T')[0]
+            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const numberOfProducts = order.orderSummary.totalItems
+            const productCosts = numberOfProducts * PRODUCT_COST
+            const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
+            const onePercentDeduction = revenue * 0.01
+            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
+            
+            if (!ordersByDate[dateKey]) {
+                ordersByDate[dateKey] = { revenue: 0, profit: 0, count: 0 }
+            }
+            ordersByDate[dateKey].revenue += Math.max(0, revenue)
+            ordersByDate[dateKey].profit += profit
+            ordersByDate[dateKey].count++
+        })
+
+        const uniqueDays = Object.keys(ordersByDate).length
+        const avgDailyRevenue = uniqueDays > 0 
+            ? Object.values(ordersByDate).reduce((sum, day) => sum + day.revenue, 0) / uniqueDays
+            : 0
+        const avgDailyProfit = uniqueDays > 0
+            ? Object.values(ordersByDate).reduce((sum, day) => sum + day.profit, 0) / uniqueDays
+            : 0
+
+        // Calculate weekly averages (group by week)
+        const ordersByWeek: { [key: string]: { revenue: number; profit: number; count: number } } = {}
+        validOrders.forEach(order => {
+            const orderDate = new Date(order.orderDate || order.createdAt)
+            // Get week number (ISO week)
+            const year = orderDate.getFullYear()
+            const startOfYear = new Date(year, 0, 1)
+            const days = Math.floor((orderDate.getTime() - startOfYear.getTime()) / (24 * 60 * 60 * 1000))
+            const weekNumber = Math.ceil((days + startOfYear.getDay() + 1) / 7)
+            const weekKey = `${year}-W${weekNumber.toString().padStart(2, '0')}`
+            
+            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const numberOfProducts = order.orderSummary.totalItems
+            const productCosts = numberOfProducts * PRODUCT_COST
+            const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
+            const onePercentDeduction = revenue * 0.01
+            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
+            
+            if (!ordersByWeek[weekKey]) {
+                ordersByWeek[weekKey] = { revenue: 0, profit: 0, count: 0 }
+            }
+            ordersByWeek[weekKey].revenue += Math.max(0, revenue)
+            ordersByWeek[weekKey].profit += profit
+            ordersByWeek[weekKey].count++
+        })
+
+        const uniqueWeeks = Object.keys(ordersByWeek).length
+        const avgWeeklyRevenue = uniqueWeeks > 0
+            ? Object.values(ordersByWeek).reduce((sum, week) => sum + week.revenue, 0) / uniqueWeeks
+            : 0
+        const avgWeeklyProfit = uniqueWeeks > 0
+            ? Object.values(ordersByWeek).reduce((sum, week) => sum + week.profit, 0) / uniqueWeeks
+            : 0
+
+        // Calculate monthly averages
+        const ordersByMonth: { [key: string]: { revenue: number; profit: number; count: number } } = {}
+        validOrders.forEach(order => {
+            const orderDate = new Date(order.orderDate || order.createdAt)
+            const monthKey = `${orderDate.getFullYear()}-${(orderDate.getMonth() + 1).toString().padStart(2, '0')}`
+            
+            const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
+            const numberOfProducts = order.orderSummary.totalItems
+            const productCosts = numberOfProducts * PRODUCT_COST
+            const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
+            const onePercentDeduction = revenue * 0.01
+            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
+            
+            if (!ordersByMonth[monthKey]) {
+                ordersByMonth[monthKey] = { revenue: 0, profit: 0, count: 0 }
+            }
+            ordersByMonth[monthKey].revenue += Math.max(0, revenue)
+            ordersByMonth[monthKey].profit += profit
+            ordersByMonth[monthKey].count++
+        })
+
+        const uniqueMonths = Object.keys(ordersByMonth).length
+        const avgMonthlyRevenue = uniqueMonths > 0
+            ? Object.values(ordersByMonth).reduce((sum, month) => sum + month.revenue, 0) / uniqueMonths
+            : 0
+        const avgMonthlyProfit = uniqueMonths > 0
+            ? Object.values(ordersByMonth).reduce((sum, month) => sum + month.profit, 0) / uniqueMonths
+            : 0
+
         return {
             ...stats,
             totalRevenue: filteredRevenue, // Use filtered revenue based on date filter
@@ -462,9 +701,26 @@ export default function DashboardPage() {
             ordersOverTime,
             avgOrderValue,
             avgProfitPerOrder,
-            filteredOrdersCount: filteredOrders.length
+            filteredOrdersCount: filteredOrders.length,
+            soldCansByStatus,
+            cansByPlantType,
+            allPlantTypes,
+            soldCansForSelectedPlantType,
+            ordersByHour: ordersByHourArray,
+            ordersByDayOfWeek: ordersByDayOfWeekArray,
+            uniqueCustomersCount: uniqueCustomers.size,
+            repeatCustomersCount: repeatCustomers,
+            avgOrdersPerCustomer,
+            conversionRate,
+            avgItemsPerOrder,
+            avgDailyRevenue,
+            avgDailyProfit,
+            avgWeeklyRevenue,
+            avgWeeklyProfit,
+            avgMonthlyRevenue,
+            avgMonthlyProfit
         }
-    }, [stats, orders, dateFilter])
+    }, [stats, orders, dateFilter, cansStatusFilter, plantTypeFilter, averagesStatusFilter])
 
     const updateOrderStatus = async (orderId: string, newStatus: Order['status']) => {
         try {
@@ -601,21 +857,22 @@ export default function DashboardPage() {
 
     return (
         <div className="min-h-screen bg-gray-50">
-            <DashboardHeader />
-            <div className="px-4 sm:px-6 lg:px-8 py-8 max-w-[1600px] mx-auto">
+            <DashboardHeader activeTab={activeTab} onTabChange={setActiveTab} />
+            <div className="px-3 sm:px-4 md:px-6 lg:px-8 py-4 md:py-6 lg:py-8 max-w-[1600px] mx-auto" data-content-area>
                 {/* Header */}
-                <div className="mb-8">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h1 className="text-3xl font-bold text-gray-900">Tableau de Bord</h1>
-                            <p className="text-gray-900 mt-2">Gérez et suivez vos commandes en temps réel</p>
+                <div className="mb-4 md:mb-6 lg:mb-8">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                        <div className="flex-1">
+                            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Tableau de Bord</h1>
+                            <p className="text-sm sm:text-base text-gray-900 mt-1 sm:mt-2">Gérez et suivez vos commandes en temps réel</p>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                             <Dialog open={isAddOrderOpen} onOpenChange={setIsAddOrderOpen}>
                                 <DialogTrigger asChild>
-                                    <Button className="gap-2 bg-blue-600 hover:bg-blue-700">
+                                    <Button className="gap-2 bg-blue-600 hover:bg-blue-700 w-full sm:w-auto">
                                         <Package className="h-4 w-4" />
-                                        Ajouter Commande
+                                        <span className="hidden sm:inline">Ajouter Commande</span>
+                                        <span className="sm:hidden">Ajouter</span>
                                     </Button>
                                 </DialogTrigger>
                                 <DialogContent className="sm:max-w-3xl lg:max-w-4xl max-h-[90vh] overflow-y-auto bg-white rounded-xl shadow-lg border border-gray-200">
@@ -874,7 +1131,7 @@ export default function DashboardPage() {
                                     </Form>
                                 </DialogContent>
                             </Dialog>
-                            <Button onClick={() => { fetchOrders(); fetchStats(); }} className="gap-2 bg-emerald-600 hover:bg-emerald-700">
+                            <Button onClick={() => { fetchOrders(); fetchStats(); }} className="gap-2 bg-emerald-600 hover:bg-emerald-700 w-full sm:w-auto">
                                 <RefreshCw className="h-4 w-4" />
                                 Actualiser
                             </Button>
@@ -885,13 +1142,13 @@ export default function DashboardPage() {
                     {adjustedStats && (
                         <>
                             {/* Date Filter for Revenue */}
-                            <Card className="bg-white border-gray-200 mb-6">
-                                <CardContent className="p-4">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-4">
-                                            <Label htmlFor="date-filter" className="text-sm font-semibold text-gray-900">Filtrer le revenu par période:</Label>
+                            <Card className="bg-white border-gray-200 mb-4 md:mb-6">
+                                <CardContent className="p-3 md:p-4">
+                                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 w-full sm:w-auto">
+                                            <Label htmlFor="date-filter" className="text-xs sm:text-sm font-semibold text-gray-900 whitespace-nowrap">Filtrer le revenu par période:</Label>
                                             <Select value={dateFilter} onValueChange={(value: typeof dateFilter) => setDateFilter(value)}>
-                                                <SelectTrigger id="date-filter" className="w-48 border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
+                                                <SelectTrigger id="date-filter" className="w-full sm:w-48 border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
                                                     <SelectValue />
                                                 </SelectTrigger>
                                                 <SelectContent>
@@ -902,209 +1159,651 @@ export default function DashboardPage() {
                                                 </SelectContent>
                                             </Select>
                                         </div>
-                                        <div className="text-sm text-gray-900">
+                                        <div className="text-xs sm:text-sm text-gray-900">
                                             <span className="font-semibold">Note:</span> Le revenu exclut les frais de livraison (8 TND par commande) et 1% de commission. Le profit exclut également le coût de production (6 TND par produit).
                                         </div>
                                     </div>
                                 </CardContent>
                             </Card>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 mb-8">
-                                <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
-                                    <CardContent className="p-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 md:gap-6 mb-8">
+                                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                    <CardContent className="p-4 md:p-6">
                                         <div className="flex items-center justify-between">
-                                            <div>
-                                                <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Total Commandes</p>
-                                                <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.filteredOrdersCount || adjustedStats.totalOrders}</p>
-                                                <p className="text-sm text-emerald-600 mt-2 flex items-center gap-1 font-medium">
-                                                    <TrendingUp className="h-3.5 w-3.5" />
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Total Commandes</p>
+                                                <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.filteredOrdersCount || adjustedStats.totalOrders}</p>
+                                                <p className="text-xs md:text-sm text-emerald-600 mt-2 flex items-center gap-1 font-medium">
+                                                    <TrendingUp className="h-3 w-3 md:h-3.5 md:w-3.5" />
                                                     +{adjustedStats.todayOrders} aujourd'hui
                                                 </p>
                                             </div>
-                                            <div className="p-4 bg-blue-100 rounded-xl">
-                                                <ShoppingCart className="h-7 w-7 text-blue-600" />
+                                            <div className="p-3 md:p-4 bg-blue-100 rounded-xl flex-shrink-0 ml-2">
+                                                <ShoppingCart className="h-5 w-5 md:h-7 md:w-7 text-blue-600" />
                                             </div>
                                         </div>
                                     </CardContent>
                                 </Card>
-                                <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
-                                    <CardContent className="p-6">
+                                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                    <CardContent className="p-4 md:p-6">
                                         <div className="flex items-center justify-between">
-                                            <div>
-                                                <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Revenu Total</p>
-                                                <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.totalRevenue.toFixed(2)} TND</p>
-                                                <p className="text-sm text-emerald-600 mt-2 flex items-center gap-1 font-medium">
-                                                    <TrendingUp className="h-3.5 w-3.5" />
-                                                    {dateFilter === "today" && `Aujourd'hui: ${adjustedStats.totalRevenue.toFixed(2)} TND`}
-                                                    {dateFilter === "yesterday" && `Hier: ${adjustedStats.yesterdayRevenue?.toFixed(2) || "0.00"} TND`}
-                                                    {dateFilter === "days_before" && `Jours précédents: ${adjustedStats.daysBeforeRevenue?.toFixed(2) || "0.00"} TND`}
-                                                    {dateFilter === "all" && `Aujourd'hui: ${adjustedStats.todayRevenue.toFixed(2)} TND`}
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Revenu Total</p>
+                                                <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.totalRevenue.toFixed(2)} TND</p>
+                                                <p className="text-xs md:text-sm text-emerald-600 mt-2 flex items-center gap-1 font-medium">
+                                                    <TrendingUp className="h-3 w-3 md:h-3.5 md:w-3.5" />
+                                                    <span className="truncate">
+                                                        {dateFilter === "today" && `Aujourd'hui: ${adjustedStats.totalRevenue.toFixed(2)} TND`}
+                                                        {dateFilter === "yesterday" && `Hier: ${adjustedStats.yesterdayRevenue?.toFixed(2) || "0.00"} TND`}
+                                                        {dateFilter === "days_before" && `Jours précédents: ${adjustedStats.daysBeforeRevenue?.toFixed(2) || "0.00"} TND`}
+                                                        {dateFilter === "all" && `Aujourd'hui: ${adjustedStats.todayRevenue.toFixed(2)} TND`}
+                                                    </span>
                                                 </p>
                                             </div>
-                                            <div className="p-4 bg-emerald-100 rounded-xl">
-                                                <DollarSign className="h-7 w-7 text-emerald-600" />
+                                            <div className="p-3 md:p-4 bg-emerald-100 rounded-xl flex-shrink-0 ml-2">
+                                                <DollarSign className="h-5 w-5 md:h-7 md:w-7 text-emerald-600" />
                                             </div>
                                         </div>
                                     </CardContent>
                                 </Card>
-                                <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
-                                    <CardContent className="p-6">
+                                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                    <CardContent className="p-4 md:p-6">
                                         <div className="flex items-center justify-between">
-                                            <div>
-                                                <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Profit Total</p>
-                                                <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.totalProfit?.toFixed(2) || "0.00"} TND</p>
-                                                <p className="text-sm text-green-600 mt-2 flex items-center gap-1 font-medium">
-                                                    <TrendingUp className="h-3.5 w-3.5" />
-                                                    {dateFilter === "today" && `Aujourd'hui: ${adjustedStats.todayProfit?.toFixed(2) || "0.00"} TND`}
-                                                    {dateFilter === "yesterday" && `Hier: ${adjustedStats.yesterdayProfit?.toFixed(2) || "0.00"} TND`}
-                                                    {dateFilter === "days_before" && `Jours précédents: ${adjustedStats.daysBeforeProfit?.toFixed(2) || "0.00"} TND`}
-                                                    {dateFilter === "all" && `Aujourd'hui: ${adjustedStats.todayProfit?.toFixed(2) || "0.00"} TND`}
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Profit Total</p>
+                                                <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.totalProfit?.toFixed(2) || "0.00"} TND</p>
+                                                <p className="text-xs md:text-sm text-green-600 mt-2 flex items-center gap-1 font-medium">
+                                                    <TrendingUp className="h-3 w-3 md:h-3.5 md:w-3.5" />
+                                                    <span className="truncate">
+                                                        {dateFilter === "today" && `Aujourd'hui: ${adjustedStats.todayProfit?.toFixed(2) || "0.00"} TND`}
+                                                        {dateFilter === "yesterday" && `Hier: ${adjustedStats.yesterdayProfit?.toFixed(2) || "0.00"} TND`}
+                                                        {dateFilter === "days_before" && `Jours précédents: ${adjustedStats.daysBeforeProfit?.toFixed(2) || "0.00"} TND`}
+                                                        {dateFilter === "all" && `Aujourd'hui: ${adjustedStats.todayProfit?.toFixed(2) || "0.00"} TND`}
+                                                    </span>
                                                 </p>
                                             </div>
-                                            <div className="p-4 bg-green-100 rounded-xl">
-                                                <BarChart3 className="h-7 w-7 text-green-600" />
+                                            <div className="p-3 md:p-4 bg-green-100 rounded-xl flex-shrink-0 ml-2">
+                                                <BarChart3 className="h-5 w-5 md:h-7 md:w-7 text-green-600" />
                                             </div>
                                         </div>
                                     </CardContent>
                                 </Card>
-                            <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
-                                <CardContent className="p-6">
+                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                <CardContent className="p-4 md:p-6">
                                     <div className="flex items-center justify-between">
-                                        <div>
-                                            <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">En Attente</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.pendingOrders}</p>
-                                            <p className="text-sm text-gray-900 mt-2 font-medium">À traiter</p>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">En Attente</p>
+                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.pendingOrders}</p>
+                                            <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">À traiter</p>
                                         </div>
-                                        <div className="p-4 bg-amber-100 rounded-xl">
-                                            <Clock className="h-7 w-7 text-amber-600" />
+                                        <div className="p-3 md:p-4 bg-amber-100 rounded-xl flex-shrink-0 ml-2">
+                                            <Clock className="h-5 w-5 md:h-7 md:w-7 text-amber-600" />
                                         </div>
                                     </div>
                                 </CardContent>
                             </Card>
-                            <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
-                                <CardContent className="p-6">
+                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                <CardContent className="p-4 md:p-6">
                                     <div className="flex items-center justify-between">
-                                        <div>
-                                            <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Confirmées</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.confirmedOrders}</p>
-                                            <p className="text-sm text-gray-900 mt-2 font-medium">À préparer</p>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Confirmées</p>
+                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.confirmedOrders}</p>
+                                            <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">À préparer</p>
                                         </div>
-                                        <div className="p-4 bg-blue-100 rounded-xl">
-                                            <CheckCircle className="h-7 w-7 text-blue-600" />
+                                        <div className="p-3 md:p-4 bg-blue-100 rounded-xl flex-shrink-0 ml-2">
+                                            <CheckCircle className="h-5 w-5 md:h-7 md:w-7 text-blue-600" />
                                         </div>
                                     </div>
                                 </CardContent>
                             </Card>
-                            <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
-                                <CardContent className="p-6">
+                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                <CardContent className="p-4 md:p-6">
                                     <div className="flex items-center justify-between">
-                                        <div>
-                                            <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">En Préparation</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.preparingOrders}</p>
-                                            <p className="text-sm text-gray-900 mt-2 font-medium">En cours</p>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">En Préparation</p>
+                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.preparingOrders}</p>
+                                            <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">En cours</p>
                                         </div>
-                                        <div className="p-4 bg-orange-100 rounded-xl">
-                                            <Package className="h-7 w-7 text-orange-600" />
+                                        <div className="p-3 md:p-4 bg-orange-100 rounded-xl flex-shrink-0 ml-2">
+                                            <Package className="h-5 w-5 md:h-7 md:w-7 text-orange-600" />
                                         </div>
                                     </div>
                                 </CardContent>
                             </Card>
-                            <Card className="bg-white border-gray-200 hover:shadow-md transition-shadow">
-                                <CardContent className="p-6">
+                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                <CardContent className="p-4 md:p-6">
                                     <div className="flex items-center justify-between">
-                                        <div>
-                                            <p className="text-sm font-semibold text-gray-900 uppercase tracking-wide">Expédiées</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{adjustedStats.shippedOrders}</p>
-                                            <p className="text-sm text-gray-900 mt-2 font-medium">En transit</p>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Expédiées</p>
+                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.shippedOrders}</p>
+                                            <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">En transit</p>
                                         </div>
-                                        <div className="p-4 bg-purple-100 rounded-xl">
-                                            <Truck className="h-7 w-7 text-purple-600" />
+                                        <div className="p-3 md:p-4 bg-purple-100 rounded-xl flex-shrink-0 ml-2">
+                                            <Truck className="h-5 w-5 md:h-7 md:w-7 text-purple-600" />
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                <CardContent className="p-4 md:p-6">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Annulées</p>
+                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.cancelledOrders}</p>
+                                            <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">Commandes annulées</p>
+                                        </div>
+                                        <div className="p-3 md:p-4 bg-red-100 rounded-xl flex-shrink-0 ml-2">
+                                            <XCircle className="h-5 w-5 md:h-7 md:w-7 text-red-600" />
                                         </div>
                                     </div>
                                 </CardContent>
                             </Card>
 
                         </div>
+
+                        {/* Cans Metrics Section */}
+                        <div className="mb-6 md:mb-8">
+                            <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-4 md:mb-6">Métriques des Boîtes</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 mb-4 md:mb-6">
+                                {/* Free Given Cans Card */}
+                                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                    <CardHeader>
+                                        <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                            <Gift className="h-4 w-4 md:h-5 md:w-5 text-emerald-600" />
+                                            Boîtes Gratuites Offertes
+                                        </CardTitle>
+                                        <CardDescription className="text-sm text-gray-600">Boîtes offertes (commande ≥ 3 boîtes)</CardDescription>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <p className="text-3xl md:text-4xl font-bold text-gray-900">
+                                                    {adjustedStats.totalFreeProducts || 0}
+                                                </p>
+                                                <p className="text-xs md:text-sm text-gray-600 mt-1">boîtes gratuites</p>
+                                                <p className="text-xs text-emerald-600 mt-2 font-medium">
+                                                    Promotion: 1 boîte gratuite pour chaque commande de 3+ boîtes
+                                                </p>
+                                            </div>
+                                            <div className="p-3 md:p-4 bg-emerald-100 rounded-xl">
+                                                <Gift className="h-6 w-6 md:h-8 md:w-8 text-emerald-600" />
+                                            </div>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            </div>
+
+                            {/* Cans by Plant Type Section */}
+                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                <CardHeader className="pb-3 md:pb-4">
+                                    <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                        <Leaf className="h-4 w-4 md:h-5 md:w-5 text-green-600" />
+                                        Boîtes par Type de Plante
+                                    </CardTitle>
+                                    <CardDescription className="text-sm text-gray-600">Analyse des ventes par type de plante</CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    <div className="space-y-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+                                            <div className="space-y-2">
+                                                <Label htmlFor="plant-type-filter" className="text-sm font-semibold text-gray-900">Sélectionner un type de plante:</Label>
+                                                <Select value={plantTypeFilter} onValueChange={setPlantTypeFilter}>
+                                                    <SelectTrigger id="plant-type-filter" className="border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
+                                                        <SelectValue placeholder="Tous les types" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="all">Tous les types</SelectItem>
+                                                        {adjustedStats.allPlantTypes?.map((plantType) => (
+                                                            <SelectItem key={plantType} value={plantType}>{plantType}</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label htmlFor="cans-status-filter" className="text-sm font-semibold text-gray-900">Filtrer par statut:</Label>
+                                                <Select value={cansStatusFilter} onValueChange={(value: typeof cansStatusFilter) => setCansStatusFilter(value)}>
+                                                    <SelectTrigger id="cans-status-filter" className="border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="all">Tous</SelectItem>
+                                                        <SelectItem value="pending">En attente</SelectItem>
+                                                        <SelectItem value="confirmed">Confirmée</SelectItem>
+                                                        <SelectItem value="preparing">En préparation</SelectItem>
+                                                        <SelectItem value="shipped">Expédiée</SelectItem>
+                                                        <SelectItem value="delivered">Livrée</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                        </div>
+                                        {plantTypeFilter === "all" ? (
+                                            <div className="space-y-3">
+                                                <div className="text-base md:text-lg font-semibold text-gray-900 mb-3">
+                                                    Total de boîtes vendues par type
+                                                    {cansStatusFilter !== "all" && (
+                                                        <span className="text-xs md:text-sm font-normal text-gray-600 ml-2">
+                                                            (statut: {cansStatusFilter === "pending" ? "En attente" : cansStatusFilter === "confirmed" ? "Confirmée" : cansStatusFilter === "preparing" ? "En préparation" : cansStatusFilter === "shipped" ? "Expédiée" : "Livrée"})
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                {adjustedStats.cansByPlantType && adjustedStats.cansByPlantType.length > 0 ? (
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+                                                        {adjustedStats.cansByPlantType.map((item) => (
+                                                            <div key={item.name} className="bg-gray-50 rounded-lg p-3 md:p-4 border border-gray-200 hover:shadow-md transition-shadow">
+                                                                <div className="flex items-center justify-between">
+                                                                    <div className="flex-1 min-w-0">
+                                                                        <p className="text-xs md:text-sm font-semibold text-gray-900 truncate">{item.name}</p>
+                                                                        <p className="text-xl md:text-2xl font-bold text-emerald-600 mt-1">{item.count}</p>
+                                                                        <p className="text-xs text-gray-600 mt-1">boîtes vendues</p>
+                                                                    </div>
+                                                                    <Leaf className="h-5 w-5 md:h-6 md:w-6 text-green-600 flex-shrink-0 ml-2" />
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                        {/* Total Cans Card */}
+                                                        <div className="bg-blue-50 rounded-lg p-3 md:p-4 border-2 border-blue-200 hover:shadow-md transition-shadow">
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-xs md:text-sm font-semibold text-gray-900">Total Boîtes</p>
+                                                                    <p className="text-xl md:text-2xl font-bold text-blue-600 mt-1">
+                                                                        {adjustedStats.cansByPlantType.reduce((sum, plant) => sum + plant.count, 0)}
+                                                                    </p>
+                                                                    <p className="text-xs text-gray-600 mt-1">boîtes vendues</p>
+                                                                </div>
+                                                                <Package className="h-5 w-5 md:h-6 md:w-6 text-blue-600 flex-shrink-0 ml-2" />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <p className="text-gray-600 text-center py-4">Aucune donnée disponible</p>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <div className="bg-emerald-50 rounded-lg p-4 md:p-6 border border-emerald-200">
+                                                <div className="flex items-center justify-between">
+                                                    <div>
+                                                        <p className="text-xs md:text-sm font-semibold text-gray-900 mb-1">Type de plante sélectionné:</p>
+                                                        <p className="text-lg md:text-xl font-bold text-emerald-600">{plantTypeFilter}</p>
+                                                        <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">
+                                                            {adjustedStats.soldCansForSelectedPlantType || 0}
+                                                        </p>
+                                                        <p className="text-xs md:text-sm text-gray-600 mt-1">
+                                                            boîtes vendues
+                                                            {cansStatusFilter !== "all" && ` (statut: ${cansStatusFilter === "pending" ? "En attente" : cansStatusFilter === "confirmed" ? "Confirmée" : cansStatusFilter === "preparing" ? "En préparation" : cansStatusFilter === "shipped" ? "Expédiée" : "Livrée"})`}
+                                                        </p>
+                                                    </div>
+                                                    <div className="p-3 md:p-4 bg-emerald-100 rounded-xl">
+                                                        <Leaf className="h-6 w-6 md:h-8 md:w-8 text-emerald-600" />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </div>
                         </>
                     )}
 
-                    {/* Tabs */}
-                    <Tabs defaultValue="analytics" className="w-full">
-                        <TabsList className="grid w-full grid-cols-3 bg-white shadow-sm">
-                            <TabsTrigger
-                                value="analytics"
-                                className="text-gray-900 data-[state=active]:bg-gray-900 data-[state=active]:text-white font-medium"
-                            >
-                                Analyses
-                            </TabsTrigger>
-                            <TabsTrigger
-                                value="orders"
-                                className="text-gray-900 data-[state=active]:bg-gray-900 data-[state=active]:text-white font-medium"
-                            >
-                                Commandes
-                            </TabsTrigger>
-                            <TabsTrigger
-                                value="recent"
-                                className="text-gray-900 data-[state=active]:bg-gray-900 data-[state=active]:text-white font-medium"
-                            >
-                                Récentes
-                            </TabsTrigger>
-                        </TabsList>
-
-                        <TabsContent value="analytics" className="mt-6">
+                    {/* Analytics Content */}
+                    {activeTab === "analytics" && (
+                        <div id="analytics-section">
                             {adjustedStats && (
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                    <Card className="bg-white border-gray-200">
-                                        <CardHeader>
-                                            <CardTitle className="text-lg font-semibold text-gray-900">Top Produits</CardTitle>
-                                            <CardDescription className="text-gray-900">Par quantité vendue</CardDescription>
-                                        </CardHeader>
-                                        <CardContent>
-                                            <ResponsiveContainer width="100%" height={300}>
-                                                <BarChart data={adjustedStats.topProducts}>
-                                                    <CartesianGrid strokeDasharray="3 3" />
-                                                    <XAxis dataKey="_id" angle={-45} textAnchor="end" height={70} />
-                                                    <YAxis />
-                                                    <Tooltip />
-                                                    <Legend />
-                                                    <Bar dataKey="totalQuantity" name="Quantité" fill="#3b82f6" />
-                                                    <Bar dataKey="totalRevenue" name="Revenu (TND)" fill="#22c55e" />
-                                                    <Bar dataKey="totalProfit" name="Profit (TND)" fill="#10b981" />
-                                                </BarChart>
-                                            </ResponsiveContainer>
-                                        </CardContent>
-                                    </Card>
-                                    <Card className="bg-white border-gray-200">
-                                        <CardHeader>
-                                            <CardTitle className="text-lg font-semibold text-gray-900">Revenu par Statut</CardTitle>
-                                            <CardDescription className="text-gray-900">Distribution du revenu</CardDescription>
-                                        </CardHeader>
-                                        <CardContent>
-                                            <ResponsiveContainer width="100%" height={300}>
-                                                <PieChart>
-                                                    <Pie
-                                                        data={Object.entries(adjustedStats.revenueByStatus).map(([key, value]) => ({ name: key, value }))}
-                                                        cx="50%"
-                                                        cy="50%"
-                                                        labelLine={false}
-                                                        outerRadius={80}
-                                                        fill="#8884d8"
-                                                        dataKey="value"
-                                                        label={({ name, percent }) => `${name} ${(percent as any * 100).toFixed(0)}% `}
-                                                    >
-                                                        {Object.entries(adjustedStats.revenueByStatus).map((entry, index) => (
-                                                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                                                        ))}
-                                                    </Pie>
-                                                    <Tooltip />
-                                                </PieChart>
-                                            </ResponsiveContainer>
-                                        </CardContent>
-                                    </Card>
-                                </div>
-                            )}
-                        </TabsContent>
+                                <>
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6 md:mb-8">
+                                        <Card className="bg-white border-gray-200">
+                                            <CardHeader>
+                                                <CardTitle className="text-lg font-semibold text-gray-900">Top Produits</CardTitle>
+                                                <CardDescription className="text-gray-900">Par quantité vendue</CardDescription>
+                                            </CardHeader>
+                                            <CardContent>
+                                                <ResponsiveContainer width="100%" height={300}>
+                                                    <BarChart data={adjustedStats.topProducts}>
+                                                        <CartesianGrid strokeDasharray="3 3" />
+                                                        <XAxis dataKey="_id" angle={-45} textAnchor="end" height={70} />
+                                                        <YAxis />
+                                                        <Tooltip />
+                                                        <Legend />
+                                                        <Bar dataKey="totalQuantity" name="Quantité" fill="#3b82f6" />
+                                                        <Bar dataKey="totalRevenue" name="Revenu (TND)" fill="#22c55e" />
+                                                        <Bar dataKey="totalProfit" name="Profit (TND)" fill="#10b981" />
+                                                    </BarChart>
+                                                </ResponsiveContainer>
+                                            </CardContent>
+                                        </Card>
+                                        <Card className="bg-white border-gray-200">
+                                            <CardHeader>
+                                                <CardTitle className="text-lg font-semibold text-gray-900">Revenu par Statut</CardTitle>
+                                                <CardDescription className="text-gray-900">Distribution du revenu</CardDescription>
+                                            </CardHeader>
+                                            <CardContent>
+                                                <ResponsiveContainer width="100%" height={300}>
+                                                    <PieChart>
+                                                        <Pie
+                                                            data={Object.entries(adjustedStats.revenueByStatus).map(([key, value]) => ({ name: key, value }))}
+                                                            cx="50%"
+                                                            cy="50%"
+                                                            labelLine={false}
+                                                            outerRadius={80}
+                                                            fill="#8884d8"
+                                                            dataKey="value"
+                                                            label={({ name, percent }) => `${name} ${(percent as any * 100).toFixed(0)}% `}
+                                                        >
+                                                            {Object.entries(adjustedStats.revenueByStatus).map((entry, index) => (
+                                                                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                                            ))}
+                                                        </Pie>
+                                                        <Tooltip />
+                                                    </PieChart>
+                                                </ResponsiveContainer>
+                                            </CardContent>
+                                        </Card>
+                                    </div>
 
-                        <TabsContent value="orders" className="mt-6">
+                                    {/* Average Revenue & Profit Metrics */}
+                                    <div className="mb-6 md:mb-8">
+                                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4 md:mb-6">
+                                            <h2 className="text-xl md:text-2xl font-bold text-gray-900">Moyennes de Revenu et Profit</h2>
+                                            <div className="flex items-center gap-3">
+                                                <Label htmlFor="averages-status-filter" className="text-xs sm:text-sm font-semibold text-gray-900 whitespace-nowrap">Filtrer par statut:</Label>
+                                                <Select value={averagesStatusFilter} onValueChange={(value: typeof averagesStatusFilter) => setAveragesStatusFilter(value)}>
+                                                    <SelectTrigger id="averages-status-filter" className="w-full sm:w-48 border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="all">Tous</SelectItem>
+                                                        <SelectItem value="pending">En attente</SelectItem>
+                                                        <SelectItem value="confirmed">Confirmée</SelectItem>
+                                                        <SelectItem value="preparing">En préparation</SelectItem>
+                                                        <SelectItem value="shipped">Expédiée</SelectItem>
+                                                        <SelectItem value="delivered">Livrée</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
+                                            {/* Daily Averages */}
+                                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                                <CardHeader className="pb-3">
+                                                    <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                                        <Calendar className="h-4 w-4 md:h-5 md:w-5 text-blue-600" />
+                                                        Moyennes Quotidiennes
+                                                    </CardTitle>
+                                                    <CardDescription className="text-sm text-gray-600">
+                                                        Par jour
+                                                        {averagesStatusFilter !== "all" && (
+                                                            <span className="text-xs text-gray-500 ml-1">
+                                                                (statut: {averagesStatusFilter === "pending" ? "En attente" : averagesStatusFilter === "confirmed" ? "Confirmée" : averagesStatusFilter === "preparing" ? "En préparation" : averagesStatusFilter === "shipped" ? "Expédiée" : "Livrée"})
+                                                            </span>
+                                                        )}
+                                                    </CardDescription>
+                                                </CardHeader>
+                                                <CardContent>
+                                                    <div className="space-y-4">
+                                                        <div className="flex items-center justify-between p-3 bg-emerald-50 rounded-lg">
+                                                            <div>
+                                                                <p className="text-xs font-semibold text-gray-600">Revenu Moyen</p>
+                                                                <p className="text-xl md:text-2xl font-bold text-emerald-600 mt-1">
+                                                                    {adjustedStats.avgDailyRevenue?.toFixed(2) || "0.00"} TND
+                                                                </p>
+                                                            </div>
+                                                            <DollarSign className="h-5 w-5 md:h-6 md:w-6 text-emerald-600" />
+                                                        </div>
+                                                        <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
+                                                            <div>
+                                                                <p className="text-xs font-semibold text-gray-600">Profit Moyen</p>
+                                                                <p className="text-xl md:text-2xl font-bold text-green-600 mt-1">
+                                                                    {adjustedStats.avgDailyProfit?.toFixed(2) || "0.00"} TND
+                                                                </p>
+                                                            </div>
+                                                            <BarChart3 className="h-5 w-5 md:h-6 md:w-6 text-green-600" />
+                                                        </div>
+                                                    </div>
+                                                </CardContent>
+                                            </Card>
+
+                                            {/* Weekly Averages */}
+                                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                                <CardHeader className="pb-3">
+                                                    <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                                        <Calendar className="h-4 w-4 md:h-5 md:w-5 text-purple-600" />
+                                                        Moyennes Hebdomadaires
+                                                    </CardTitle>
+                                                    <CardDescription className="text-sm text-gray-600">
+                                                        Par semaine
+                                                        {averagesStatusFilter !== "all" && (
+                                                            <span className="text-xs text-gray-500 ml-1">
+                                                                (statut: {averagesStatusFilter === "pending" ? "En attente" : averagesStatusFilter === "confirmed" ? "Confirmée" : averagesStatusFilter === "preparing" ? "En préparation" : averagesStatusFilter === "shipped" ? "Expédiée" : "Livrée"})
+                                                            </span>
+                                                        )}
+                                                    </CardDescription>
+                                                </CardHeader>
+                                                <CardContent>
+                                                    <div className="space-y-4">
+                                                        <div className="flex items-center justify-between p-3 bg-emerald-50 rounded-lg">
+                                                            <div>
+                                                                <p className="text-xs font-semibold text-gray-600">Revenu Moyen</p>
+                                                                <p className="text-xl md:text-2xl font-bold text-emerald-600 mt-1">
+                                                                    {adjustedStats.avgWeeklyRevenue?.toFixed(2) || "0.00"} TND
+                                                                </p>
+                                                            </div>
+                                                            <DollarSign className="h-5 w-5 md:h-6 md:w-6 text-emerald-600" />
+                                                        </div>
+                                                        <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
+                                                            <div>
+                                                                <p className="text-xs font-semibold text-gray-600">Profit Moyen</p>
+                                                                <p className="text-xl md:text-2xl font-bold text-green-600 mt-1">
+                                                                    {adjustedStats.avgWeeklyProfit?.toFixed(2) || "0.00"} TND
+                                                                </p>
+                                                            </div>
+                                                            <BarChart3 className="h-5 w-5 md:h-6 md:w-6 text-green-600" />
+                                                        </div>
+                                                    </div>
+                                                </CardContent>
+                                            </Card>
+
+                                            {/* Monthly Averages */}
+                                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                                <CardHeader className="pb-3">
+                                                    <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                                        <Calendar className="h-4 w-4 md:h-5 md:w-5 text-orange-600" />
+                                                        Moyennes Mensuelles
+                                                    </CardTitle>
+                                                    <CardDescription className="text-sm text-gray-600">
+                                                        Par mois
+                                                        {averagesStatusFilter !== "all" && (
+                                                            <span className="text-xs text-gray-500 ml-1">
+                                                                (statut: {averagesStatusFilter === "pending" ? "En attente" : averagesStatusFilter === "confirmed" ? "Confirmée" : averagesStatusFilter === "preparing" ? "En préparation" : averagesStatusFilter === "shipped" ? "Expédiée" : "Livrée"})
+                                                            </span>
+                                                        )}
+                                                    </CardDescription>
+                                                </CardHeader>
+                                                <CardContent>
+                                                    <div className="space-y-4">
+                                                        <div className="flex items-center justify-between p-3 bg-emerald-50 rounded-lg">
+                                                            <div>
+                                                                <p className="text-xs font-semibold text-gray-600">Revenu Moyen</p>
+                                                                <p className="text-xl md:text-2xl font-bold text-emerald-600 mt-1">
+                                                                    {adjustedStats.avgMonthlyRevenue?.toFixed(2) || "0.00"} TND
+                                                                </p>
+                                                            </div>
+                                                            <DollarSign className="h-5 w-5 md:h-6 md:w-6 text-emerald-600" />
+                                                        </div>
+                                                        <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
+                                                            <div>
+                                                                <p className="text-xs font-semibold text-gray-600">Profit Moyen</p>
+                                                                <p className="text-xl md:text-2xl font-bold text-green-600 mt-1">
+                                                                    {adjustedStats.avgMonthlyProfit?.toFixed(2) || "0.00"} TND
+                                                                </p>
+                                                            </div>
+                                                            <BarChart3 className="h-5 w-5 md:h-6 md:w-6 text-green-600" />
+                                                        </div>
+                                                    </div>
+                                                </CardContent>
+                                            </Card>
+                                        </div>
+                                    </div>
+
+                                    {/* Customer & Performance Metrics */}
+                                    <div className="mb-6 md:mb-8">
+                                        <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-4 md:mb-6">Métriques Clients & Performance</h2>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+                                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                                <CardContent className="p-4 md:p-6">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex-1">
+                                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Clients Uniques</p>
+                                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.uniqueCustomersCount || 0}</p>
+                                                            <p className="text-xs text-gray-500 mt-1">clients actifs</p>
+                                                        </div>
+                                                        <div className="p-3 md:p-4 bg-indigo-100 rounded-xl">
+                                                            <Users className="h-5 w-5 md:h-6 md:w-6 text-indigo-600" />
+                                                        </div>
+                                                    </div>
+                                                </CardContent>
+                                            </Card>
+                                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                                <CardContent className="p-4 md:p-6">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex-1">
+                                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Clients Récurrents</p>
+                                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.repeatCustomersCount || 0}</p>
+                                                            <p className="text-xs text-gray-500 mt-1">
+                                                                {adjustedStats.uniqueCustomersCount && adjustedStats.uniqueCustomersCount > 0
+                                                                    ? `${((adjustedStats.repeatCustomersCount || 0) / adjustedStats.uniqueCustomersCount * 100).toFixed(1)}% du total`
+                                                                    : '0% du total'}
+                                                            </p>
+                                                        </div>
+                                                        <div className="p-3 md:p-4 bg-purple-100 rounded-xl">
+                                                            <Repeat className="h-5 w-5 md:h-6 md:w-6 text-purple-600" />
+                                                        </div>
+                                                    </div>
+                                                </CardContent>
+                                            </Card>
+                                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                                <CardContent className="p-4 md:p-6">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex-1">
+                                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Taux de Conversion</p>
+                                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.conversionRate?.toFixed(1) || 0}%</p>
+                                                            <p className="text-xs text-gray-500 mt-1">commandes livrées</p>
+                                                        </div>
+                                                        <div className="p-3 md:p-4 bg-emerald-100 rounded-xl">
+                                                            <Target className="h-5 w-5 md:h-6 md:w-6 text-emerald-600" />
+                                                        </div>
+                                                    </div>
+                                                </CardContent>
+                                            </Card>
+                                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                                <CardContent className="p-4 md:p-6">
+                                                    <div className="flex items-center justify-between">
+                                                        <div className="flex-1">
+                                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Moy. Articles/Commande</p>
+                                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.avgItemsPerOrder?.toFixed(1) || 0}</p>
+                                                            <p className="text-xs text-gray-500 mt-1">articles par commande</p>
+                                                        </div>
+                                                        <div className="p-3 md:p-4 bg-cyan-100 rounded-xl">
+                                                            <Activity className="h-5 w-5 md:h-6 md:w-6 text-cyan-600" />
+                                                        </div>
+                                                    </div>
+                                                </CardContent>
+                                            </Card>
+                                        </div>
+                                    </div>
+
+                                    {/* Timeline Analysis Section */}
+                                    <div className="mb-6 md:mb-8">
+                                        <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-4 md:mb-6">Analyse Temporelle des Ventes</h2>
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
+                                            {/* Orders by Hour of Day */}
+                                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                                <CardHeader>
+                                                    <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                                        <Clock className="h-4 w-4 md:h-5 md:w-5 text-blue-600" />
+                                                        Commandes par Heure de la Journée
+                                                    </CardTitle>
+                                                    <CardDescription className="text-sm text-gray-600">Heures de pointe pour les ventes</CardDescription>
+                                                </CardHeader>
+                                                <CardContent>
+                                                    {adjustedStats.ordersByHour && adjustedStats.ordersByHour.length > 0 ? (
+                                                        <ResponsiveContainer width="100%" height={300}>
+                                                            <BarChart data={adjustedStats.ordersByHour}>
+                                                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                                                                <XAxis 
+                                                                    dataKey="hourLabel" 
+                                                                    angle={-45} 
+                                                                    textAnchor="end" 
+                                                                    height={80}
+                                                                    tick={{ fontSize: 12 }}
+                                                                    interval={2}
+                                                                />
+                                                                <YAxis tick={{ fontSize: 12 }} />
+                                                                <Tooltip 
+                                                                    contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }}
+                                                                    labelStyle={{ color: '#374151', fontWeight: 600 }}
+                                                                />
+                                                                <Bar dataKey="count" fill="#3b82f6" radius={[8, 8, 0, 0]} />
+                                                            </BarChart>
+                                                        </ResponsiveContainer>
+                                                    ) : (
+                                                        <div className="text-center py-12 text-gray-500">
+                                                            <Clock className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                                                            <p>Aucune donnée disponible</p>
+                                                        </div>
+                                                    )}
+                                                </CardContent>
+                                            </Card>
+
+                                            {/* Orders by Day of Week */}
+                                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                                <CardHeader>
+                                                    <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                                        <Calendar className="h-4 w-4 md:h-5 md:w-5 text-green-600" />
+                                                        Commandes par Jour de la Semaine
+                                                    </CardTitle>
+                                                    <CardDescription className="text-sm text-gray-600">Jours les plus actifs</CardDescription>
+                                                </CardHeader>
+                                                <CardContent>
+                                                    {adjustedStats.ordersByDayOfWeek && adjustedStats.ordersByDayOfWeek.length > 0 ? (
+                                                        <ResponsiveContainer width="100%" height={300}>
+                                                            <BarChart data={adjustedStats.ordersByDayOfWeek}>
+                                                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                                                                <XAxis 
+                                                                    dataKey="day" 
+                                                                    tick={{ fontSize: 12 }}
+                                                                />
+                                                                <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+                                                                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
+                                                                <Tooltip 
+                                                                    contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }}
+                                                                    labelStyle={{ color: '#374151', fontWeight: 600 }}
+                                                                    formatter={(value: any, name: string) => {
+                                                                        if (name === 'revenue') return [`${value.toFixed(2)} TND`, 'Revenu']
+                                                                        return [value, 'Commandes']
+                                                                    }}
+                                                                />
+                                                                <Legend />
+                                                                <Bar yAxisId="left" dataKey="count" fill="#22c55e" name="Commandes" radius={[8, 8, 0, 0]} />
+                                                                <Bar yAxisId="right" dataKey="revenue" fill="#3b82f6" name="Revenu (TND)" radius={[8, 8, 0, 0]} />
+                                                            </BarChart>
+                                                        </ResponsiveContainer>
+                                                    ) : (
+                                                        <div className="text-center py-12 text-gray-500">
+                                                            <Calendar className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                                                            <p>Aucune donnée disponible</p>
+                                                        </div>
+                                                    )}
+                                                </CardContent>
+                                            </Card>
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Orders Content */}
+                    {activeTab === "orders" && (
+                        <div id="orders-section" className="mt-6">
                             <Card className="mb-6 border-gray-200 bg-white">
                                 <CardHeader className="pb-4 border-b border-gray-100">
                                     <CardTitle className="text-lg font-semibold text-gray-900">Recherche et Filtres</CardTitle>
@@ -1300,72 +1999,8 @@ export default function DashboardPage() {
                                     )}
                                 </CardContent>
                             </Card>
-                        </TabsContent>
-
-                        <TabsContent value="recent" className="mt-6">
-                            <Card className="bg-white border-gray-200">
-                                <CardHeader>
-                                    <CardTitle className="text-lg font-semibold text-gray-900">Commandes Récentes</CardTitle>
-                                    <CardDescription className="text-gray-900">Les 5 dernières commandes</CardDescription>
-                                </CardHeader>
-                                <CardContent>
-                                    {adjustedStats && adjustedStats.recentOrders && adjustedStats.recentOrders.length > 0 ? (
-                                        <div className="space-y-4">
-                                            {adjustedStats.recentOrders.map((order) => {
-                                                // Subtract 8 TND delivery fee from total price
-                                                const revenueWithoutDelivery = Math.max(0, order.orderSummary.totalPrice - 8)
-                                                return (
-                                                    <div key={order._id} className="flex items-center justify-between border-b border-gray-200 pb-4 last:border-0">
-                                                        <div>
-                                                            <div className="flex items-center gap-2">
-                                                                <Link href={`/dashboard/orders/${order._id}`} className="font-bold text-gray-900 hover:underline">
-                                                                    {order.orderNumber}
-                                                                </Link>
-                                                                {order.note && order.note.trim() !== '' && (
-                                                                    <Dialog>
-                                                                        <DialogTrigger asChild>
-                                                                            <Button
-                                                                                variant="outline"
-                                                                                size="sm"
-                                                                                className="h-6 px-2 text-xs text-amber-600 hover:text-amber-700 bg-amber-50 hover:bg-amber-100 border-amber-300"
-                                                                            >
-                                                                                <FileText className="h-3 w-3 mr-1" />
-                                                                                Note
-                                                                            </Button>
-                                                                        </DialogTrigger>
-                                                                        <DialogContent className="max-w-md bg-white border-gray-200">
-                                                                            <DialogHeader>
-                                                                                <DialogTitle className="text-black font-semibold">Note - {order.orderNumber}</DialogTitle>
-                                                                            </DialogHeader>
-                                                                            <div className="mt-4">
-                                                                                <p className="text-sm text-black whitespace-pre-wrap leading-relaxed">{order.note}</p>
-                                                                            </div>
-                                                                        </DialogContent>
-                                                                    </Dialog>
-                                                                )}
-                                                            </div>
-                                                            <p className="text-sm text-gray-900">{order.customer.fullName} - {revenueWithoutDelivery.toFixed(2)} TND</p>
-                                                            <p className="text-sm text-gray-900">
-                                                                {new Date(order.createdAt).toLocaleDateString('fr-FR')} à{' '}
-                                                                {new Date(order.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-                                                            </p>
-                                                        </div>
-                                                        {getStatusBadge(order.status)}
-                                                    </div>
-                                                )
-                                            })}
-                                        </div>
-                                    ) : (
-                                        <div className="text-center py-8">
-                                            <Package className="h-12 w-12 text-gray-900 mx-auto mb-4" />
-                                            <p className="text-gray-900 font-medium">Aucune commande récente disponible</p>
-                                            <p className="text-sm text-gray-900 mt-2">Créez de nouvelles commandes pour voir les dernières activités ici.</p>
-                                        </div>
-                                    )}
-                                </CardContent>
-                            </Card>
-                        </TabsContent>
-                    </Tabs>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
