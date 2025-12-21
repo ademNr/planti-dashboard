@@ -316,8 +316,8 @@ export default function OrderDetailsPage() {
                                         placeholder="Ajoutez une note après l'appel de confirmation..."
                                         className="min-h-[100px] text-gray-900 bg-white border-gray-300"
                                     />
-                                    <Button 
-                                        onClick={updateOrder} 
+                                    <Button
+                                        onClick={updateOrder}
                                         disabled={updating}
                                         className="bg-emerald-600 hover:bg-emerald-700 text-white"
                                     >
@@ -426,20 +426,20 @@ export default function OrderDetailsPage() {
                                     const DELIVERY_FEE = 8 // Shipping cost in TND
                                     const PRODUCT_COST = 6 // Cost per product unit in TND
                                     const FREE_PRODUCT_COST = 6 // Cost of free product
-                                    
+
                                     // Calculate free products: 1 free product for orders with 3+ products
                                     const freeProductQuantity = order.orderSummary.totalItems >= 3 ? 1 : 0
-                                    
+
                                     // Revenue = totalPrice - shipping
                                     const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
-                                    
+
                                     // Profit calculation
                                     const numberOfProducts = order.orderSummary.totalItems
                                     const productCosts = numberOfProducts * PRODUCT_COST
                                     const freeProductCost = freeProductQuantity > 0 ? FREE_PRODUCT_COST : 0
-                                    const onePercentDeduction = revenue * 0.01
-                                    const profit = revenue - productCosts - freeProductCost - onePercentDeduction
-                                    
+                                    const threePercentDeduction = revenue * 0.03
+                                    const profit = revenue - productCosts - freeProductCost - threePercentDeduction
+
                                     return (
                                         <>
                                             {freeProductQuantity > 0 && (
@@ -471,8 +471,8 @@ export default function OrderDetailsPage() {
                                                 </div>
                                             )}
                                             <div className="flex justify-between text-sm text-gray-600">
-                                                <p>Moins: 1% du Revenu</p>
-                                                <p>-{onePercentDeduction.toFixed(2)} TND</p>
+                                                <p>Moins: 3% du Revenu</p>
+                                                <p>-{threePercentDeduction.toFixed(2)} TND</p>
                                             </div>
                                             <div className="flex justify-between font-semibold text-emerald-600 pt-2 border-t">
                                                 <p>Profit Net</p>

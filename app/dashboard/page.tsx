@@ -18,7 +18,7 @@ import {
     Package, DollarSign, ShoppingCart, Search,
     Eye, Truck, CheckCircle, Clock, XCircle, RefreshCw,
     BarChart3, MapPin, Phone, TrendingUp, User, CreditCard, FileText, Gift, Leaf,
-    Users, Repeat, Calendar, Activity, Target
+    Users, Repeat, Calendar, Activity, Target, Undo2
 } from "lucide-react"
 import { DashboardHeader } from "@/components/header"
 import Link from "next/link"
@@ -139,6 +139,13 @@ interface DashboardStats {
     avgWeeklyProfit?: number
     avgMonthlyRevenue?: number
     avgMonthlyProfit?: number
+    returnsCount?: number
+}
+
+interface ReturnData {
+    _id: string
+    createdAt: string
+    cost: number
 }
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
@@ -179,6 +186,8 @@ export default function DashboardPage() {
     const [activeTab, setActiveTab] = useState<"analytics" | "orders">("analytics")
     const [isAddOrderOpen, setIsAddOrderOpen] = useState(false)
     const [addingOrder, setAddingOrder] = useState(false)
+    const [returns, setReturns] = useState<ReturnData[]>([])
+    const [addingReturn, setAddingReturn] = useState(false)
 
     const form = useForm<OrderForm>({
         resolver: zodResolver(orderSchema) as any,
@@ -204,11 +213,42 @@ export default function DashboardPage() {
     useEffect(() => {
         fetchOrders()
         fetchStats()
+        fetchReturns()
     }, [])
+
+    const fetchReturns = async () => {
+        try {
+            const response = await fetch('/api/returns')
+            const data = await response.json()
+            if (data.success) {
+                setReturns(data.data)
+            }
+        } catch (error) {
+            console.error("Error fetching returns:", error)
+        }
+    }
+
+    const addReturn = async () => {
+        if (!confirm("Confirmer l'ajout d'un retour (Coût: 3 TND) ?")) return
+
+        setAddingReturn(true)
+        try {
+            const response = await fetch('/api/returns', {
+                method: 'POST',
+            })
+            if (response.ok) {
+                fetchReturns()
+            }
+        } catch (error) {
+            console.error("Error adding return:", error)
+        } finally {
+            setAddingReturn(false)
+        }
+    }
 
     const fetchOrders = async () => {
         try {
-            const response = await fetch(`${BACKEND_URL}/api/orders`)
+            const response = await fetch(`${BACKEND_URL}/api/orders?limit=10000`)
             const data = await response.json()
             setOrders(data.orders || [])
         } catch (error) {
@@ -250,24 +290,24 @@ export default function DashboardPage() {
         const calculateProfit = (orderList: Order[]) => {
             return orderList.reduce((sum, order) => {
                 if (order.status === 'cancelled') return sum
-                
+
                 // Step 1: Calculate revenue (totalPrice - shipping)
                 const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
-                
+
                 // Step 2: Calculate product costs (6 TND per product unit)
                 const numberOfProducts = order.orderSummary.totalItems
                 const productCosts = numberOfProducts * PRODUCT_COST
-                
+
                 // Step 3: Calculate free product cost (6 TND if 3+ products)
                 const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
-                
-                // Step 4: Calculate 1% deduction from revenue
-                const onePercentDeduction = revenue * 0.01
-                
+
+                // Step 4: Calculate 3% deduction from revenue
+                const threePercentDeduction = revenue * 0.03
+
                 // Step 5: Calculate profit
-                // Profit = Revenue - Product Costs - Free Product Cost - 1% Deduction
-                const profit = revenue - productCosts - freeProductCost - onePercentDeduction
-                
+                // Profit = Revenue - Product Costs - Free Product Cost - 3% Deduction
+                const profit = revenue - productCosts - freeProductCost - threePercentDeduction
+
                 return sum + profit
             }, 0)
         }
@@ -323,29 +363,73 @@ export default function DashboardPage() {
         const daysBeforeOrders = filterOrdersByDate("days_before")
         const filteredOrders = filterOrdersByDate(dateFilter)
 
+        // Filter returns based on date filter (for accurate profit calculation)
+        const filterReturnsByDate = (filter: DateFilterType, returnsList: ReturnData[]) => {
+            switch (filter) {
+                case "today":
+                    return returnsList.filter(r => {
+                        const rDate = new Date(r.createdAt)
+                        rDate.setHours(0, 0, 0, 0)
+                        return rDate.getTime() === today.getTime()
+                    })
+                case "yesterday":
+                    return returnsList.filter(r => {
+                        const rDate = new Date(r.createdAt)
+                        rDate.setHours(0, 0, 0, 0)
+                        return rDate.getTime() === yesterday.getTime()
+                    })
+                case "days_before":
+                    return returnsList.filter(r => {
+                        const rDate = new Date(r.createdAt)
+                        rDate.setHours(0, 0, 0, 0)
+                        return rDate.getTime() < yesterday.getTime()
+                    })
+                default:
+                    return returnsList
+            }
+        }
+
+        const filteredReturns = filterReturnsByDate(dateFilter, returns)
+        const todayReturns = filterReturnsByDate("today", returns)
+        const yesterdayReturns = filterReturnsByDate("yesterday", returns)
+        const daysBeforeReturns = filterReturnsByDate("days_before", returns)
+
+        // Calculate returns cost (3 TND per return)
+        const calculateReturnsCost = (returnsList: ReturnData[]) => returnsList.length * 3
+
         // Calculate totals
         const totalRevenue = calculateRevenue(orders)
-        const totalProfit = calculateProfit(orders.filter(o => o.status !== 'cancelled'))
+        const totalProfitBeforeReturns = calculateProfit(orders.filter(o => o.status !== 'cancelled'))
+        const totalReturnsCost = calculateReturnsCost(returns)
+        const totalProfit = totalProfitBeforeReturns - totalReturnsCost
         const totalFreeProducts = calculateFreeProducts(orders.filter(o => o.status !== 'cancelled'))
 
         // Calculate today's revenue and profit
         const todayRevenue = calculateRevenue(todayOrders)
-        const todayProfit = calculateProfit(todayOrders.filter(o => o.status !== 'cancelled'))
+        const todayProfitBeforeReturns = calculateProfit(todayOrders.filter(o => o.status !== 'cancelled'))
+        const todayReturnsCost = calculateReturnsCost(todayReturns)
+        const todayProfit = todayProfitBeforeReturns - todayReturnsCost
         const todayFreeProducts = calculateFreeProducts(todayOrders.filter(o => o.status !== 'cancelled'))
-        
+
         // Calculate yesterday's revenue and profit
         const yesterdayRevenue = calculateRevenue(yesterdayOrders)
-        const yesterdayProfit = calculateProfit(yesterdayOrders.filter(o => o.status !== 'cancelled'))
+        const yesterdayProfitBeforeReturns = calculateProfit(yesterdayOrders.filter(o => o.status !== 'cancelled'))
+        const yesterdayReturnsCost = calculateReturnsCost(yesterdayReturns)
+        const yesterdayProfit = yesterdayProfitBeforeReturns - yesterdayReturnsCost
         const yesterdayFreeProducts = calculateFreeProducts(yesterdayOrders.filter(o => o.status !== 'cancelled'))
-        
+
         // Calculate days before revenue and profit
         const daysBeforeRevenue = calculateRevenue(daysBeforeOrders)
-        const daysBeforeProfit = calculateProfit(daysBeforeOrders.filter(o => o.status !== 'cancelled'))
+        const daysBeforeProfitBeforeReturns = calculateProfit(daysBeforeOrders.filter(o => o.status !== 'cancelled'))
+        const daysBeforeReturnsCost = calculateReturnsCost(daysBeforeReturns)
+        const daysBeforeProfit = daysBeforeProfitBeforeReturns - daysBeforeReturnsCost
         const daysBeforeFreeProducts = calculateFreeProducts(daysBeforeOrders.filter(o => o.status !== 'cancelled'))
-        
+
         // Calculate filtered revenue and profit based on date filter
         const filteredRevenue = calculateRevenue(filteredOrders)
-        const filteredProfit = calculateProfit(filteredOrders.filter(o => o.status !== 'cancelled'))
+        const filteredProfitBeforeReturns = calculateProfit(filteredOrders.filter(o => o.status !== 'cancelled'))
+        const filteredReturnsCost = calculateReturnsCost(filteredReturns)
+        const filteredProfit = filteredProfitBeforeReturns - filteredReturnsCost
         const filteredFreeProducts = calculateFreeProducts(filteredOrders.filter(o => o.status !== 'cancelled'))
 
         // Calculate revenue and profit by status
@@ -353,18 +437,18 @@ export default function DashboardPage() {
         const profitByStatus: { [key: string]: number } = {}
         filteredOrders.forEach(order => {
             if (order.status === 'cancelled') return
-            
+
             // Revenue = totalPrice - shipping
             const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
             revenueByStatus[order.status] = (revenueByStatus[order.status] || 0) + Math.max(0, revenue)
-            
+
             // Profit calculation
             const numberOfProducts = order.orderSummary.totalItems
             const productCosts = numberOfProducts * PRODUCT_COST
             const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
-            const onePercentDeduction = revenue * 0.01
-            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
-            
+            const threePercentDeduction = revenue * 0.03
+            const profit = revenue - productCosts - freeProductCost - threePercentDeduction
+
             profitByStatus[order.status] = (profitByStatus[order.status] || 0) + profit
         })
 
@@ -373,17 +457,17 @@ export default function DashboardPage() {
         filteredOrders.forEach(order => {
             if (order.status === 'cancelled') return
             const city = order.customer.city
-            
+
             // Revenue = totalPrice - shipping
             const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
-            
+
             // Profit calculation
             const numberOfProducts = order.orderSummary.totalItems
             const productCosts = numberOfProducts * PRODUCT_COST
             const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
-            const onePercentDeduction = revenue * 0.01
-            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
-            
+            const threePercentDeduction = revenue * 0.03
+            const profit = revenue - productCosts - freeProductCost - threePercentDeduction
+
             if (!revenueByCityMap[city]) {
                 revenueByCityMap[city] = { count: 0, revenue: 0, profit: 0 }
             }
@@ -402,17 +486,17 @@ export default function DashboardPage() {
         const productRevenueMap: { [key: string]: { totalQuantity: number; totalRevenue: number; totalProfit: number; orderCount: number } } = {}
         filteredOrders.forEach(order => {
             if (order.status === 'cancelled') return
-            
+
             // Calculate order-level revenue and profit
             const orderRevenue = order.orderSummary.totalPrice - DELIVERY_FEE
             const numberOfProducts = order.orderSummary.totalItems
             const productCosts = numberOfProducts * PRODUCT_COST
             const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
-            const onePercentDeduction = orderRevenue * 0.01
-            const orderProfit = orderRevenue - productCosts - freeProductCost - onePercentDeduction
-            
+            const threePercentDeduction = orderRevenue * 0.03
+            const orderProfit = orderRevenue - productCosts - freeProductCost - threePercentDeduction
+
             const orderTotalProducts = order.products.reduce((sum, p) => sum + (p.price * p.quantity), 0)
-            
+
             order.products.forEach(product => {
                 const productName = product.name
                 if (!productRevenueMap[productName]) {
@@ -441,17 +525,17 @@ export default function DashboardPage() {
         filteredOrders.forEach(order => {
             if (order.status === 'cancelled') return
             const dateKey = new Date(order.orderDate || order.createdAt).toISOString().split('T')[0]
-            
+
             // Revenue = totalPrice - shipping
             const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
-            
+
             // Profit calculation
             const numberOfProducts = order.orderSummary.totalItems
             const productCosts = numberOfProducts * PRODUCT_COST
             const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
-            const onePercentDeduction = revenue * 0.01
-            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
-            
+            const threePercentDeduction = revenue * 0.03
+            const profit = revenue - productCosts - freeProductCost - threePercentDeduction
+
             if (!revenueOverTimeMap[dateKey]) {
                 revenueOverTimeMap[dateKey] = { count: 0, revenue: 0, profit: 0 }
             }
@@ -468,8 +552,8 @@ export default function DashboardPage() {
 
         // Calculate average order value without delivery
         const avgOrderValue = filteredOrders.length > 0 ? filteredRevenue / filteredOrders.length : 0
-        const avgProfitPerOrder = filteredOrders.filter(o => o.status !== 'cancelled').length > 0 
-            ? filteredProfit / filteredOrders.filter(o => o.status !== 'cancelled').length 
+        const avgProfitPerOrder = filteredOrders.filter(o => o.status !== 'cancelled').length > 0
+            ? filteredProfit / filteredOrders.filter(o => o.status !== 'cancelled').length
             : 0
 
         // Calculate sold cans by status
@@ -511,12 +595,12 @@ export default function DashboardPage() {
         })).sort((a, b) => b.count - a.count)
 
         // Get all unique plant types
-        const allPlantTypes = Array.from(new Set(orders.flatMap(order => 
+        const allPlantTypes = Array.from(new Set(orders.flatMap(order =>
             order.products.map(p => p.name)
         ))).sort()
 
         // Calculate sold cans for selected plant type
-        const soldCansForSelectedPlantType = plantTypeFilter === "all" 
+        const soldCansForSelectedPlantType = plantTypeFilter === "all"
             ? soldCansByStatus[cansStatusFilter]
             : orders.reduce((sum, order) => {
                 if (order.status === 'cancelled') return sum
@@ -572,8 +656,8 @@ export default function DashboardPage() {
             customerOrderCount[customerId] = (customerOrderCount[customerId] || 0) + 1
         })
         const repeatCustomers = Object.values(customerOrderCount).filter(count => count > 1).length
-        const avgOrdersPerCustomer = uniqueCustomers.size > 0 
-            ? filteredOrders.filter(o => o.status !== 'cancelled').length / uniqueCustomers.size 
+        const avgOrdersPerCustomer = uniqueCustomers.size > 0
+            ? filteredOrders.filter(o => o.status !== 'cancelled').length / uniqueCustomers.size
             : 0
 
         // Conversion Rate Metrics (based on order status progression)
@@ -592,7 +676,7 @@ export default function DashboardPage() {
             if (averagesStatusFilter !== 'all' && o.status !== averagesStatusFilter) return false
             return true
         })
-        
+
         // Group orders by date
         const ordersByDate: { [key: string]: { revenue: number; profit: number; count: number } } = {}
         validOrders.forEach(order => {
@@ -601,9 +685,9 @@ export default function DashboardPage() {
             const numberOfProducts = order.orderSummary.totalItems
             const productCosts = numberOfProducts * PRODUCT_COST
             const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
-            const onePercentDeduction = revenue * 0.01
-            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
-            
+            const threePercentDeduction = revenue * 0.03
+            const profit = revenue - productCosts - freeProductCost - threePercentDeduction
+
             if (!ordersByDate[dateKey]) {
                 ordersByDate[dateKey] = { revenue: 0, profit: 0, count: 0 }
             }
@@ -613,7 +697,7 @@ export default function DashboardPage() {
         })
 
         const uniqueDays = Object.keys(ordersByDate).length
-        const avgDailyRevenue = uniqueDays > 0 
+        const avgDailyRevenue = uniqueDays > 0
             ? Object.values(ordersByDate).reduce((sum, day) => sum + day.revenue, 0) / uniqueDays
             : 0
         const avgDailyProfit = uniqueDays > 0
@@ -630,14 +714,14 @@ export default function DashboardPage() {
             const days = Math.floor((orderDate.getTime() - startOfYear.getTime()) / (24 * 60 * 60 * 1000))
             const weekNumber = Math.ceil((days + startOfYear.getDay() + 1) / 7)
             const weekKey = `${year}-W${weekNumber.toString().padStart(2, '0')}`
-            
+
             const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
             const numberOfProducts = order.orderSummary.totalItems
             const productCosts = numberOfProducts * PRODUCT_COST
             const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
-            const onePercentDeduction = revenue * 0.01
-            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
-            
+            const threePercentDeduction = revenue * 0.03
+            const profit = revenue - productCosts - freeProductCost - threePercentDeduction
+
             if (!ordersByWeek[weekKey]) {
                 ordersByWeek[weekKey] = { revenue: 0, profit: 0, count: 0 }
             }
@@ -659,14 +743,14 @@ export default function DashboardPage() {
         validOrders.forEach(order => {
             const orderDate = new Date(order.orderDate || order.createdAt)
             const monthKey = `${orderDate.getFullYear()}-${(orderDate.getMonth() + 1).toString().padStart(2, '0')}`
-            
+
             const revenue = order.orderSummary.totalPrice - DELIVERY_FEE
             const numberOfProducts = order.orderSummary.totalItems
             const productCosts = numberOfProducts * PRODUCT_COST
             const freeProductCost = numberOfProducts >= 3 ? FREE_PRODUCT_COST : 0
-            const onePercentDeduction = revenue * 0.01
-            const profit = revenue - productCosts - freeProductCost - onePercentDeduction
-            
+            const threePercentDeduction = revenue * 0.03
+            const profit = revenue - productCosts - freeProductCost - threePercentDeduction
+
             if (!ordersByMonth[monthKey]) {
                 ordersByMonth[monthKey] = { revenue: 0, profit: 0, count: 0 }
             }
@@ -718,9 +802,10 @@ export default function DashboardPage() {
             avgWeeklyRevenue,
             avgWeeklyProfit,
             avgMonthlyRevenue,
-            avgMonthlyProfit
+            avgMonthlyProfit,
+            returnsCount: filteredReturns.length
         }
-    }, [stats, orders, dateFilter, cansStatusFilter, plantTypeFilter, averagesStatusFilter])
+    }, [stats, orders, dateFilter, cansStatusFilter, plantTypeFilter, averagesStatusFilter, returns])
 
     const updateOrderStatus = async (orderId: string, newStatus: Order['status']) => {
         try {
@@ -1135,6 +1220,10 @@ export default function DashboardPage() {
                                 <RefreshCw className="h-4 w-4" />
                                 Actualiser
                             </Button>
+                            <Button onClick={addReturn} disabled={addingReturn} className="gap-2 w-full sm:w-auto bg-red-600 hover:bg-red-700 text-white">
+                                <Undo2 className="h-4 w-4" />
+                                {addingReturn ? "Ajout..." : "Ajouter Retour"}
+                            </Button>
                         </div>
                     </div>
 
@@ -1160,7 +1249,7 @@ export default function DashboardPage() {
                                             </Select>
                                         </div>
                                         <div className="text-xs sm:text-sm text-gray-900">
-                                            <span className="font-semibold">Note:</span> Le revenu exclut les frais de livraison (8 TND par commande) et 1% de commission. Le profit exclut également le coût de production (6 TND par produit).
+                                            <span className="font-semibold">Note:</span> Le revenu exclut les frais de livraison (8 TND par commande) et 3% de commission. Le profit exclut également le coût de production (6 TND par produit) et les coûts de retour (3 TND par retour).
                                         </div>
                                     </div>
                                 </CardContent>
@@ -1227,220 +1316,234 @@ export default function DashboardPage() {
                                         </div>
                                     </CardContent>
                                 </Card>
-                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
-                                <CardContent className="p-4 md:p-6">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">En Attente</p>
-                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.pendingOrders}</p>
-                                            <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">À traiter</p>
-                                        </div>
-                                        <div className="p-3 md:p-4 bg-amber-100 rounded-xl flex-shrink-0 ml-2">
-                                            <Clock className="h-5 w-5 md:h-7 md:w-7 text-amber-600" />
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
-                                <CardContent className="p-4 md:p-6">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Confirmées</p>
-                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.confirmedOrders}</p>
-                                            <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">À préparer</p>
-                                        </div>
-                                        <div className="p-3 md:p-4 bg-blue-100 rounded-xl flex-shrink-0 ml-2">
-                                            <CheckCircle className="h-5 w-5 md:h-7 md:w-7 text-blue-600" />
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
-                                <CardContent className="p-4 md:p-6">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">En Préparation</p>
-                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.preparingOrders}</p>
-                                            <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">En cours</p>
-                                        </div>
-                                        <div className="p-3 md:p-4 bg-orange-100 rounded-xl flex-shrink-0 ml-2">
-                                            <Package className="h-5 w-5 md:h-7 md:w-7 text-orange-600" />
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
-                                <CardContent className="p-4 md:p-6">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Expédiées</p>
-                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.shippedOrders}</p>
-                                            <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">En transit</p>
-                                        </div>
-                                        <div className="p-3 md:p-4 bg-purple-100 rounded-xl flex-shrink-0 ml-2">
-                                            <Truck className="h-5 w-5 md:h-7 md:w-7 text-purple-600" />
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
-                                <CardContent className="p-4 md:p-6">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Annulées</p>
-                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.cancelledOrders}</p>
-                                            <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">Commandes annulées</p>
-                                        </div>
-                                        <div className="p-3 md:p-4 bg-red-100 rounded-xl flex-shrink-0 ml-2">
-                                            <XCircle className="h-5 w-5 md:h-7 md:w-7 text-red-600" />
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-
-                        </div>
-
-                        {/* Cans Metrics Section */}
-                        <div className="mb-6 md:mb-8">
-                            <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-4 md:mb-6">Métriques des Boîtes</h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 mb-4 md:mb-6">
-                                {/* Free Given Cans Card */}
                                 <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
-                                    <CardHeader>
-                                        <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
-                                            <Gift className="h-4 w-4 md:h-5 md:w-5 text-emerald-600" />
-                                            Boîtes Gratuites Offertes
-                                        </CardTitle>
-                                        <CardDescription className="text-sm text-gray-600">Boîtes offertes (commande ≥ 3 boîtes)</CardDescription>
-                                    </CardHeader>
-                                    <CardContent>
+                                    <CardContent className="p-4 md:p-6">
                                         <div className="flex items-center justify-between">
-                                            <div>
-                                                <p className="text-3xl md:text-4xl font-bold text-gray-900">
-                                                    {adjustedStats.totalFreeProducts || 0}
-                                                </p>
-                                                <p className="text-xs md:text-sm text-gray-600 mt-1">boîtes gratuites</p>
-                                                <p className="text-xs text-emerald-600 mt-2 font-medium">
-                                                    Promotion: 1 boîte gratuite pour chaque commande de 3+ boîtes
-                                                </p>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Retours</p>
+                                                <p className="text-2xl md:text-3xl font-bold text-red-600 mt-2">{adjustedStats.returnsCount || 0}</p>
+                                                <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">Commandes retournées</p>
                                             </div>
-                                            <div className="p-3 md:p-4 bg-emerald-100 rounded-xl">
-                                                <Gift className="h-6 w-6 md:h-8 md:w-8 text-emerald-600" />
+                                            <div className="p-3 md:p-4 bg-red-100 rounded-xl flex-shrink-0 ml-2">
+                                                <Undo2 className="h-5 w-5 md:h-7 md:w-7 text-red-600" />
                                             </div>
                                         </div>
                                     </CardContent>
                                 </Card>
-                            </div>
-
-                            {/* Cans by Plant Type Section */}
-                            <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
-                                <CardHeader className="pb-3 md:pb-4">
-                                    <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
-                                        <Leaf className="h-4 w-4 md:h-5 md:w-5 text-green-600" />
-                                        Boîtes par Type de Plante
-                                    </CardTitle>
-                                    <CardDescription className="text-sm text-gray-600">Analyse des ventes par type de plante</CardDescription>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="space-y-4">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-                                            <div className="space-y-2">
-                                                <Label htmlFor="plant-type-filter" className="text-sm font-semibold text-gray-900">Sélectionner un type de plante:</Label>
-                                                <Select value={plantTypeFilter} onValueChange={setPlantTypeFilter}>
-                                                    <SelectTrigger id="plant-type-filter" className="border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
-                                                        <SelectValue placeholder="Tous les types" />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        <SelectItem value="all">Tous les types</SelectItem>
-                                                        {adjustedStats.allPlantTypes?.map((plantType) => (
-                                                            <SelectItem key={plantType} value={plantType}>{plantType}</SelectItem>
-                                                        ))}
-                                                    </SelectContent>
-                                                </Select>
+                                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                    <CardContent className="p-4 md:p-6">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">En Attente</p>
+                                                <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.pendingOrders}</p>
+                                                <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">À traiter</p>
                                             </div>
-                                            <div className="space-y-2">
-                                                <Label htmlFor="cans-status-filter" className="text-sm font-semibold text-gray-900">Filtrer par statut:</Label>
-                                                <Select value={cansStatusFilter} onValueChange={(value: typeof cansStatusFilter) => setCansStatusFilter(value)}>
-                                                    <SelectTrigger id="cans-status-filter" className="border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
-                                                        <SelectValue />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        <SelectItem value="all">Tous</SelectItem>
-                                                        <SelectItem value="pending">En attente</SelectItem>
-                                                        <SelectItem value="confirmed">Confirmée</SelectItem>
-                                                        <SelectItem value="preparing">En préparation</SelectItem>
-                                                        <SelectItem value="shipped">Expédiée</SelectItem>
-                                                        <SelectItem value="delivered">Livrée</SelectItem>
-                                                    </SelectContent>
-                                                </Select>
+                                            <div className="p-3 md:p-4 bg-amber-100 rounded-xl flex-shrink-0 ml-2">
+                                                <Clock className="h-5 w-5 md:h-7 md:w-7 text-amber-600" />
                                             </div>
                                         </div>
-                                        {plantTypeFilter === "all" ? (
-                                            <div className="space-y-3">
-                                                <div className="text-base md:text-lg font-semibold text-gray-900 mb-3">
-                                                    Total de boîtes vendues par type
-                                                    {cansStatusFilter !== "all" && (
-                                                        <span className="text-xs md:text-sm font-normal text-gray-600 ml-2">
-                                                            (statut: {cansStatusFilter === "pending" ? "En attente" : cansStatusFilter === "confirmed" ? "Confirmée" : cansStatusFilter === "preparing" ? "En préparation" : cansStatusFilter === "shipped" ? "Expédiée" : "Livrée"})
-                                                        </span>
-                                                    )}
+                                    </CardContent>
+                                </Card>
+                                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                    <CardContent className="p-4 md:p-6">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Confirmées</p>
+                                                <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.confirmedOrders}</p>
+                                                <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">À préparer</p>
+                                            </div>
+                                            <div className="p-3 md:p-4 bg-blue-100 rounded-xl flex-shrink-0 ml-2">
+                                                <CheckCircle className="h-5 w-5 md:h-7 md:w-7 text-blue-600" />
+                                            </div>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                    <CardContent className="p-4 md:p-6">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">En Préparation</p>
+                                                <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.preparingOrders}</p>
+                                                <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">En cours</p>
+                                            </div>
+                                            <div className="p-3 md:p-4 bg-orange-100 rounded-xl flex-shrink-0 ml-2">
+                                                <Package className="h-5 w-5 md:h-7 md:w-7 text-orange-600" />
+                                            </div>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                    <CardContent className="p-4 md:p-6">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Expédiées</p>
+                                                <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.shippedOrders}</p>
+                                                <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">En transit</p>
+                                            </div>
+                                            <div className="p-3 md:p-4 bg-purple-100 rounded-xl flex-shrink-0 ml-2">
+                                                <Truck className="h-5 w-5 md:h-7 md:w-7 text-purple-600" />
+                                            </div>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                    <CardContent className="p-4 md:p-6">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs md:text-sm font-semibold text-gray-600 uppercase tracking-wide">Annulées</p>
+                                                <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">{adjustedStats.cancelledOrders}</p>
+                                                <p className="text-xs md:text-sm text-gray-600 mt-2 font-medium">Commandes annulées</p>
+                                            </div>
+                                            <div className="p-3 md:p-4 bg-red-100 rounded-xl flex-shrink-0 ml-2">
+                                                <XCircle className="h-5 w-5 md:h-7 md:w-7 text-red-600" />
+                                            </div>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+
+                            </div>
+
+                            {/* Cans Metrics Section */}
+                            <div className="mb-6 md:mb-8">
+                                <h2 className="text-xl md:text-2xl font-bold text-gray-900 mb-4 md:mb-6">Métriques des Boîtes</h2>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6 mb-4 md:mb-6">
+                                    {/* Free Given Cans Card */}
+                                    <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                        <CardHeader>
+                                            <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                                <Gift className="h-4 w-4 md:h-5 md:w-5 text-emerald-600" />
+                                                Boîtes Gratuites Offertes
+                                            </CardTitle>
+                                            <CardDescription className="text-sm text-gray-600">Boîtes offertes (commande ≥ 3 boîtes)</CardDescription>
+                                        </CardHeader>
+                                        <CardContent>
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <p className="text-3xl md:text-4xl font-bold text-gray-900">
+                                                        {adjustedStats.totalFreeProducts || 0}
+                                                    </p>
+                                                    <p className="text-xs md:text-sm text-gray-600 mt-1">boîtes gratuites</p>
+                                                    <p className="text-xs text-emerald-600 mt-2 font-medium">
+                                                        Promotion: 1 boîte gratuite pour chaque commande de 3+ boîtes
+                                                    </p>
                                                 </div>
-                                                {adjustedStats.cansByPlantType && adjustedStats.cansByPlantType.length > 0 ? (
-                                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
-                                                        {adjustedStats.cansByPlantType.map((item) => (
-                                                            <div key={item.name} className="bg-gray-50 rounded-lg p-3 md:p-4 border border-gray-200 hover:shadow-md transition-shadow">
+                                                <div className="p-3 md:p-4 bg-emerald-100 rounded-xl">
+                                                    <Gift className="h-6 w-6 md:h-8 md:w-8 text-emerald-600" />
+                                                </div>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                </div>
+
+                                {/* Cans by Plant Type Section */}
+                                <Card className="bg-white border-gray-200 hover:shadow-lg transition-all duration-200">
+                                    <CardHeader className="pb-3 md:pb-4">
+                                        <CardTitle className="text-base md:text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                            <Leaf className="h-4 w-4 md:h-5 md:w-5 text-green-600" />
+                                            Boîtes par Type de Plante
+                                        </CardTitle>
+                                        <CardDescription className="text-sm text-gray-600">Analyse des ventes par type de plante</CardDescription>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <div className="space-y-4">
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+                                                <div className="space-y-2">
+                                                    <Label htmlFor="plant-type-filter" className="text-sm font-semibold text-gray-900">Sélectionner un type de plante:</Label>
+                                                    <Select value={plantTypeFilter} onValueChange={setPlantTypeFilter}>
+                                                        <SelectTrigger id="plant-type-filter" className="border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
+                                                            <SelectValue placeholder="Tous les types" />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="all">Tous les types</SelectItem>
+                                                            {adjustedStats.allPlantTypes?.map((plantType) => (
+                                                                <SelectItem key={plantType} value={plantType}>{plantType}</SelectItem>
+                                                            ))}
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label htmlFor="cans-status-filter" className="text-sm font-semibold text-gray-900">Filtrer par statut:</Label>
+                                                    <Select value={cansStatusFilter} onValueChange={(value: typeof cansStatusFilter) => setCansStatusFilter(value)}>
+                                                        <SelectTrigger id="cans-status-filter" className="border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
+                                                            <SelectValue />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="all">Tous</SelectItem>
+                                                            <SelectItem value="pending">En attente</SelectItem>
+                                                            <SelectItem value="confirmed">Confirmée</SelectItem>
+                                                            <SelectItem value="preparing">En préparation</SelectItem>
+                                                            <SelectItem value="shipped">Expédiée</SelectItem>
+                                                            <SelectItem value="delivered">Livrée</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                            </div>
+                                            {plantTypeFilter === "all" ? (
+                                                <div className="space-y-3">
+                                                    <div className="text-base md:text-lg font-semibold text-gray-900 mb-3">
+                                                        Total de boîtes vendues par type
+                                                        {cansStatusFilter !== "all" && (
+                                                            <span className="text-xs md:text-sm font-normal text-gray-600 ml-2">
+                                                                (statut: {cansStatusFilter === "pending" ? "En attente" : cansStatusFilter === "confirmed" ? "Confirmée" : cansStatusFilter === "preparing" ? "En préparation" : cansStatusFilter === "shipped" ? "Expédiée" : "Livrée"})
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    {adjustedStats.cansByPlantType && adjustedStats.cansByPlantType.length > 0 ? (
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+                                                            {adjustedStats.cansByPlantType.map((item) => (
+                                                                <div key={item.name} className="bg-gray-50 rounded-lg p-3 md:p-4 border border-gray-200 hover:shadow-md transition-shadow">
+                                                                    <div className="flex items-center justify-between">
+                                                                        <div className="flex-1 min-w-0">
+                                                                            <p className="text-xs md:text-sm font-semibold text-gray-900 truncate">{item.name}</p>
+                                                                            <p className="text-xl md:text-2xl font-bold text-emerald-600 mt-1">{item.count}</p>
+                                                                            <p className="text-xs text-gray-600 mt-1">boîtes vendues</p>
+                                                                        </div>
+                                                                        <Leaf className="h-5 w-5 md:h-6 md:w-6 text-green-600 flex-shrink-0 ml-2" />
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                            {/* Total Cans Card */}
+                                                            <div className="bg-blue-50 rounded-lg p-3 md:p-4 border-2 border-blue-200 hover:shadow-md transition-shadow">
                                                                 <div className="flex items-center justify-between">
                                                                     <div className="flex-1 min-w-0">
-                                                                        <p className="text-xs md:text-sm font-semibold text-gray-900 truncate">{item.name}</p>
-                                                                        <p className="text-xl md:text-2xl font-bold text-emerald-600 mt-1">{item.count}</p>
+                                                                        <p className="text-xs md:text-sm font-semibold text-gray-900">Total Boîtes</p>
+                                                                        <p className="text-xl md:text-2xl font-bold text-blue-600 mt-1">
+                                                                            {adjustedStats.cansByPlantType.reduce((sum, plant) => sum + plant.count, 0)}
+                                                                        </p>
                                                                         <p className="text-xs text-gray-600 mt-1">boîtes vendues</p>
                                                                     </div>
-                                                                    <Leaf className="h-5 w-5 md:h-6 md:w-6 text-green-600 flex-shrink-0 ml-2" />
+                                                                    <Package className="h-5 w-5 md:h-6 md:w-6 text-blue-600 flex-shrink-0 ml-2" />
                                                                 </div>
-                                                            </div>
-                                                        ))}
-                                                        {/* Total Cans Card */}
-                                                        <div className="bg-blue-50 rounded-lg p-3 md:p-4 border-2 border-blue-200 hover:shadow-md transition-shadow">
-                                                            <div className="flex items-center justify-between">
-                                                                <div className="flex-1 min-w-0">
-                                                                    <p className="text-xs md:text-sm font-semibold text-gray-900">Total Boîtes</p>
-                                                                    <p className="text-xl md:text-2xl font-bold text-blue-600 mt-1">
-                                                                        {adjustedStats.cansByPlantType.reduce((sum, plant) => sum + plant.count, 0)}
-                                                                    </p>
-                                                                    <p className="text-xs text-gray-600 mt-1">boîtes vendues</p>
-                                                                </div>
-                                                                <Package className="h-5 w-5 md:h-6 md:w-6 text-blue-600 flex-shrink-0 ml-2" />
                                                             </div>
                                                         </div>
-                                                    </div>
-                                                ) : (
-                                                    <p className="text-gray-600 text-center py-4">Aucune donnée disponible</p>
-                                                )}
-                                            </div>
-                                        ) : (
-                                            <div className="bg-emerald-50 rounded-lg p-4 md:p-6 border border-emerald-200">
-                                                <div className="flex items-center justify-between">
-                                                    <div>
-                                                        <p className="text-xs md:text-sm font-semibold text-gray-900 mb-1">Type de plante sélectionné:</p>
-                                                        <p className="text-lg md:text-xl font-bold text-emerald-600">{plantTypeFilter}</p>
-                                                        <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">
-                                                            {adjustedStats.soldCansForSelectedPlantType || 0}
-                                                        </p>
-                                                        <p className="text-xs md:text-sm text-gray-600 mt-1">
-                                                            boîtes vendues
-                                                            {cansStatusFilter !== "all" && ` (statut: ${cansStatusFilter === "pending" ? "En attente" : cansStatusFilter === "confirmed" ? "Confirmée" : cansStatusFilter === "preparing" ? "En préparation" : cansStatusFilter === "shipped" ? "Expédiée" : "Livrée"})`}
-                                                        </p>
-                                                    </div>
-                                                    <div className="p-3 md:p-4 bg-emerald-100 rounded-xl">
-                                                        <Leaf className="h-6 w-6 md:h-8 md:w-8 text-emerald-600" />
+                                                    ) : (
+                                                        <p className="text-gray-600 text-center py-4">Aucune donnée disponible</p>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <div className="bg-emerald-50 rounded-lg p-4 md:p-6 border border-emerald-200">
+                                                    <div className="flex items-center justify-between">
+                                                        <div>
+                                                            <p className="text-xs md:text-sm font-semibold text-gray-900 mb-1">Type de plante sélectionné:</p>
+                                                            <p className="text-lg md:text-xl font-bold text-emerald-600">{plantTypeFilter}</p>
+                                                            <p className="text-2xl md:text-3xl font-bold text-gray-900 mt-2">
+                                                                {adjustedStats.soldCansForSelectedPlantType || 0}
+                                                            </p>
+                                                            <p className="text-xs md:text-sm text-gray-600 mt-1">
+                                                                boîtes vendues
+                                                                {cansStatusFilter !== "all" && ` (statut: ${cansStatusFilter === "pending" ? "En attente" : cansStatusFilter === "confirmed" ? "Confirmée" : cansStatusFilter === "preparing" ? "En préparation" : cansStatusFilter === "shipped" ? "Expédiée" : "Livrée"})`}
+                                                            </p>
+                                                        </div>
+                                                        <div className="p-3 md:p-4 bg-emerald-100 rounded-xl">
+                                                            <Leaf className="h-6 w-6 md:h-8 md:w-8 text-emerald-600" />
+                                                        </div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        </div>
+                                            )}
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            </div>
                         </>
                     )}
 
@@ -1728,16 +1831,16 @@ export default function DashboardPage() {
                                                         <ResponsiveContainer width="100%" height={300}>
                                                             <BarChart data={adjustedStats.ordersByHour}>
                                                                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                                                                <XAxis 
-                                                                    dataKey="hourLabel" 
-                                                                    angle={-45} 
-                                                                    textAnchor="end" 
+                                                                <XAxis
+                                                                    dataKey="hourLabel"
+                                                                    angle={-45}
+                                                                    textAnchor="end"
                                                                     height={80}
                                                                     tick={{ fontSize: 12 }}
                                                                     interval={2}
                                                                 />
                                                                 <YAxis tick={{ fontSize: 12 }} />
-                                                                <Tooltip 
+                                                                <Tooltip
                                                                     contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }}
                                                                     labelStyle={{ color: '#374151', fontWeight: 600 }}
                                                                 />
@@ -1767,13 +1870,13 @@ export default function DashboardPage() {
                                                         <ResponsiveContainer width="100%" height={300}>
                                                             <BarChart data={adjustedStats.ordersByDayOfWeek}>
                                                                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                                                                <XAxis 
-                                                                    dataKey="day" 
+                                                                <XAxis
+                                                                    dataKey="day"
                                                                     tick={{ fontSize: 12 }}
                                                                 />
                                                                 <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
                                                                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-                                                                <Tooltip 
+                                                                <Tooltip
                                                                     contentStyle={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }}
                                                                     labelStyle={{ color: '#374151', fontWeight: 600 }}
                                                                     formatter={(value: any, name: string) => {
