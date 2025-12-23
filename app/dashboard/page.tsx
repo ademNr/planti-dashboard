@@ -3,6 +3,7 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -11,6 +12,11 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from "@/components/ui/dialog"
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import { format, subDays, startOfDay, endOfDay } from "date-fns"
+import { DateRange } from "react-day-picker"
 import { useForm, useFieldArray } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
@@ -18,7 +24,7 @@ import {
     Package, DollarSign, ShoppingCart, Search,
     Eye, Truck, CheckCircle, Clock, XCircle, RefreshCw,
     BarChart3, MapPin, Phone, TrendingUp, User, CreditCard, FileText, Gift, Leaf,
-    Users, Repeat, Calendar, Activity, Target, Undo2
+    Users, Repeat, Calendar as CalendarIcon, Activity, Target, Undo2
 } from "lucide-react"
 import { DashboardHeader } from "@/components/header"
 import Link from "next/link"
@@ -179,7 +185,8 @@ export default function DashboardPage() {
     const [searchTerm, setSearchTerm] = useState("")
     const [statusFilter, setStatusFilter] = useState("all")
     const [cityFilter, setCityFilter] = useState("")
-    const [dateFilter, setDateFilter] = useState<"all" | "today" | "yesterday" | "days_before">("all")
+    const [dateFilter, setDateFilter] = useState<"all" | "today" | "yesterday" | "days_before" | "custom">("all")
+    const [dateRange, setDateRange] = useState<DateRange | undefined>()
     const [cansStatusFilter, setCansStatusFilter] = useState<"all" | "pending" | "confirmed" | "preparing" | "shipped" | "delivered">("all")
     const [plantTypeFilter, setPlantTypeFilter] = useState<string>("all")
     const [averagesStatusFilter, setAveragesStatusFilter] = useState<"all" | "pending" | "confirmed" | "preparing" | "shipped" | "delivered">("all")
@@ -331,7 +338,8 @@ export default function DashboardPage() {
         yesterday.setDate(yesterday.getDate() - 1)
 
         // Filter orders by date
-        type DateFilterType = "all" | "today" | "yesterday" | "days_before"
+        // Filter orders by date
+        type DateFilterType = "all" | "today" | "yesterday" | "days_before" | "custom"
         const filterOrdersByDate = (filter: DateFilterType) => {
             switch (filter) {
                 case "today":
@@ -351,6 +359,14 @@ export default function DashboardPage() {
                         const orderDate = new Date(order.orderDate || order.createdAt)
                         orderDate.setHours(0, 0, 0, 0)
                         return orderDate.getTime() < yesterday.getTime()
+                    })
+                case "custom":
+                    if (!dateRange?.from) return orders
+                    return orders.filter(order => {
+                        const orderDate = new Date(order.orderDate || order.createdAt)
+                        const from = startOfDay(dateRange.from!)
+                        const to = dateRange.to ? endOfDay(dateRange.to) : endOfDay(dateRange.from!)
+                        return orderDate >= from && orderDate <= to
                     })
                 default:
                     return orders
@@ -383,6 +399,14 @@ export default function DashboardPage() {
                         const rDate = new Date(r.createdAt)
                         rDate.setHours(0, 0, 0, 0)
                         return rDate.getTime() < yesterday.getTime()
+                    })
+                case "custom":
+                    if (!dateRange?.from) return returnsList
+                    return returnsList.filter(r => {
+                        const rDate = new Date(r.createdAt)
+                        const from = startOfDay(dateRange.from!)
+                        const to = dateRange.to ? endOfDay(dateRange.to) : endOfDay(dateRange.from!)
+                        return rDate >= from && rDate <= to
                     })
                 default:
                     return returnsList
@@ -803,9 +827,10 @@ export default function DashboardPage() {
             avgWeeklyProfit,
             avgMonthlyRevenue,
             avgMonthlyProfit,
+
             returnsCount: filteredReturns.length
         }
-    }, [stats, orders, dateFilter, cansStatusFilter, plantTypeFilter, averagesStatusFilter, returns])
+    }, [stats, orders, dateFilter, dateRange, cansStatusFilter, plantTypeFilter, averagesStatusFilter, returns])
 
     const updateOrderStatus = async (orderId: string, newStatus: Order['status']) => {
         try {
@@ -1236,17 +1261,73 @@ export default function DashboardPage() {
                                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                         <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 w-full sm:w-auto">
                                             <Label htmlFor="date-filter" className="text-xs sm:text-sm font-semibold text-gray-900 whitespace-nowrap">Filtrer le revenu par période:</Label>
-                                            <Select value={dateFilter} onValueChange={(value: typeof dateFilter) => setDateFilter(value)}>
-                                                <SelectTrigger id="date-filter" className="w-full sm:w-48 border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="all">Toutes les périodes</SelectItem>
-                                                    <SelectItem value="today">Aujourd'hui</SelectItem>
-                                                    <SelectItem value="yesterday">Hier</SelectItem>
-                                                    <SelectItem value="days_before">Jours précédents</SelectItem>
-                                                </SelectContent>
-                                            </Select>
+                                            <div className="flex items-center gap-2">
+                                                <Select
+                                                    value={dateFilter}
+                                                    onValueChange={(value: typeof dateFilter) => {
+                                                        setDateFilter(value)
+                                                        if (value === "today") {
+                                                            setDateRange({ from: new Date(), to: new Date() })
+                                                        } else if (value === "yesterday") {
+                                                            const y = subDays(new Date(), 1)
+                                                            setDateRange({ from: y, to: y })
+                                                        } else if (value === "all") {
+                                                            setDateRange(undefined)
+                                                        }
+                                                    }}
+                                                >
+                                                    <SelectTrigger id="date-filter" className="w-full sm:w-48 border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 text-gray-900">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="all">Toutes les périodes</SelectItem>
+                                                        <SelectItem value="today">Aujourd'hui</SelectItem>
+                                                        <SelectItem value="yesterday">Hier</SelectItem>
+                                                        <SelectItem value="days_before">Jours précédents</SelectItem>
+                                                        <SelectItem value="custom">Période personnalisée</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+
+                                                <Popover>
+                                                    <PopoverTrigger asChild>
+                                                        <Button
+                                                            id="date"
+                                                            variant={"outline"}
+                                                            className={cn(
+                                                                "w-[260px] justify-start text-left font-normal border-gray-300",
+                                                                !dateRange && "text-muted-foreground"
+                                                            )}
+                                                        >
+                                                            <CalendarIcon className="mr-2 h-4 w-4" />
+                                                            {dateRange?.from ? (
+                                                                dateRange.to ? (
+                                                                    <>
+                                                                        {format(dateRange.from, "dd/MM/yyyy")} -{" "}
+                                                                        {format(dateRange.to, "dd/MM/yyyy")}
+                                                                    </>
+                                                                ) : (
+                                                                    format(dateRange.from, "dd/MM/yyyy")
+                                                                )
+                                                            ) : (
+                                                                <span>Choisir une période</span>
+                                                            )}
+                                                        </Button>
+                                                    </PopoverTrigger>
+                                                    <PopoverContent className="w-auto p-0" align="start">
+                                                        <Calendar
+                                                            initialFocus
+                                                            mode="range"
+                                                            defaultMonth={dateRange?.from}
+                                                            selected={dateRange}
+                                                            onSelect={(range) => {
+                                                                setDateRange(range)
+                                                                if (range?.from) setDateFilter("custom")
+                                                            }}
+                                                            numberOfMonths={2}
+                                                        />
+                                                    </PopoverContent>
+                                                </Popover>
+                                            </div>
                                         </div>
                                         <div className="text-xs sm:text-sm text-gray-900">
                                             <span className="font-semibold">Note:</span> Le revenu exclut les frais de livraison (8 TND par commande) et 3% de commission. Le profit exclut également le coût de production (6 TND par produit) et les coûts de retour (3 TND par retour).
@@ -1284,6 +1365,7 @@ export default function DashboardPage() {
                                                         {dateFilter === "today" && `Aujourd'hui: ${adjustedStats.totalRevenue.toFixed(2)} TND`}
                                                         {dateFilter === "yesterday" && `Hier: ${adjustedStats.yesterdayRevenue?.toFixed(2) || "0.00"} TND`}
                                                         {dateFilter === "days_before" && `Jours précédents: ${adjustedStats.daysBeforeRevenue?.toFixed(2) || "0.00"} TND`}
+                                                        {dateFilter === "custom" && `Période sélectionnée: ${adjustedStats.totalRevenue.toFixed(2)} TND`}
                                                         {dateFilter === "all" && `Aujourd'hui: ${adjustedStats.todayRevenue.toFixed(2)} TND`}
                                                     </span>
                                                 </p>
@@ -1306,6 +1388,7 @@ export default function DashboardPage() {
                                                         {dateFilter === "today" && `Aujourd'hui: ${adjustedStats.todayProfit?.toFixed(2) || "0.00"} TND`}
                                                         {dateFilter === "yesterday" && `Hier: ${adjustedStats.yesterdayProfit?.toFixed(2) || "0.00"} TND`}
                                                         {dateFilter === "days_before" && `Jours précédents: ${adjustedStats.daysBeforeProfit?.toFixed(2) || "0.00"} TND`}
+                                                        {dateFilter === "custom" && `Période sélectionnée: ${adjustedStats.totalProfit?.toFixed(2) || "0.00"} TND`}
                                                         {dateFilter === "all" && `Aujourd'hui: ${adjustedStats.todayProfit?.toFixed(2) || "0.00"} TND`}
                                                     </span>
                                                 </p>
