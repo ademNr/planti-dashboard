@@ -1132,6 +1132,7 @@ export default function DashboardPage() {
                                                                                 <SelectItem value="Basilic">Basilic</SelectItem>
                                                                                 <SelectItem value="Origan">Origan</SelectItem>
                                                                                 <SelectItem value="Œillet d'Inde">Œillet d'Inde</SelectItem>
+                                                                                <SelectItem value="Menthe">Menthe</SelectItem>
 
 
                                                                             </SelectContent>
